@@ -5,10 +5,12 @@ Provides the graphical interface for selecting and installing an AppImage.
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFileDialog, QGroupBox, QRadioButton, 
-                             QProgressBar, QSpacerItem, QSizePolicy, QFormLayout)
-from PyQt6.QtCore import Qt, QTimer
+                             QProgressBar, QSpacerItem, QSizePolicy, QFormLayout,
+                             QToolButton, QMenu, QListWidget, QListWidgetItem)
+from PyQt6.QtCore import Qt, QTimer, QPoint, QEvent, QCoreApplication
 import os
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 
 from .. import config
 # from i18n import _ # Remove this import
@@ -45,6 +47,23 @@ class InstallPage(QWidget):
         file_selection_layout.addWidget(self.select_file_button)
         main_layout.addLayout(file_selection_layout)
         main_layout.addSpacing(15) # Add spacing after file selection
+
+        # --- Recent AppImages popup for quick selection ---
+        home = os.path.expanduser("~")
+        recent_paths = []
+        for sub in ["Downloads", "Desktop"]:
+            dir_path = os.path.join(home, sub)
+            if os.path.isdir(dir_path):
+                for fname in os.listdir(dir_path):
+                    if fname.lower().endswith(('.appimage', '.AppImage')):
+                        recent_paths.append(os.path.join(dir_path, fname))
+        if recent_paths:
+            self.recent_button = QPushButton(translator.get_text("Recent AppImages"))
+            self.recent_button.setIcon(QIcon.fromTheme("view-list"))
+            self.recent_button.clicked.connect(self.show_recent_popup)
+            self._recent_paths = recent_paths
+            self._recent_popup = None
+            file_selection_layout.addWidget(self.recent_button)
 
         # --- AppImage Information (Placeholders) ---
         self.info_group = QGroupBox(translator.get_text("lbl_app_info"))
@@ -415,6 +434,61 @@ class InstallPage(QWidget):
                 self.status_label.setText(translator.get_text("Installing..."))
             else:
                 self.status_label.setText(translator.get_text("Ready"))
+
+    def show_recent_popup(self):
+        """Show recent AppImages via a styled QMenu that auto-closes on click-away and selection."""
+        from PyQt6.QtCore import QPoint, Qt
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+        # Build the menu
+        menu = QMenu(self)
+        # Make it a Popup and delete on close so clicking away hides it
+        menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.Popup)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        for path in self._recent_paths:
+            act = QAction(QIcon.fromTheme("application-x-appimage"), os.path.basename(path), menu)
+            act.setData(path)
+            menu.addAction(act)
+
+        # Apply theme-aware styling
+        dark = getattr(self.window(), 'dark_mode', False)
+        bg = '#333333' if dark else '#ffffff'
+        text = '#ffffff' if dark else '#000000'
+        border = '#555555' if dark else '#cccccc'
+        # Use stronger semi-transparent white hover in dark for better contrast, light gray in light
+        hover = 'rgba(255, 255, 255, 0.3)' if dark else '#e0e0e0'
+        style = f"""
+QMenu {{
+    background-color: {bg};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 8px;
+}}
+QMenu::item {{
+    padding: 8px;
+    margin: 2px;
+    border-radius: 4px;
+}}
+/* highlight on hover or selection */
+QMenu::item:selected,
+QMenu::item:hover {{
+    background-color: {hover};
+}}
+"""
+        menu.setStyleSheet(style)
+
+        # Execute menu; exec() blocks and auto-closes on click-away
+        pos = self.recent_button.mapToGlobal(QPoint(0, self.recent_button.height()))
+        selected_action = menu.exec(pos)
+        if selected_action:
+            path = selected_action.data()
+            self.selected_file_label.setText(path)
+            self.process_selected_file(path)
+            self.install_button.setEnabled(True)
+            self.info_group.setVisible(True)
+            self.options_group.setVisible(True)
+            self.status_label.setVisible(False)
+            self.progress_bar.setVisible(False)
 
 # --- Logger Setup (Example - Adapt as needed) ---
 # Needs to be configured properly, potentially passed in or using a global setup
