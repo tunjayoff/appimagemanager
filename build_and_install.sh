@@ -80,6 +80,13 @@ echo -e "\n${YELLOW}Creating Debian package layout...${NC}"
 mkdir -p deb_pkg/usr/bin deb_pkg/DEBIAN
 cp dist/${PKG_NAME} deb_pkg/usr/bin/${PKG_NAME}
 
+# Install custom icon if provided
+if [ -f resources/icon.png ]; then
+  echo -e "${YELLOW}Installing custom application icon...${NC}"
+  mkdir -p deb_pkg/usr/share/icons/hicolor/256x256/apps
+  cp resources/icon.png deb_pkg/usr/share/icons/hicolor/256x256/apps/${PKG_NAME}.png
+fi
+
 # Create control file
 echo -e "${YELLOW}Creating Debian control file...${NC}"
 cat > deb_pkg/DEBIAN/control <<EOF
@@ -91,6 +98,20 @@ Architecture: amd64
 Maintainer: ${MAINTAINER}
 Depends: libxcb-cursor0
 Description: Easily install, manage, and remove AppImage applications on Ubuntu with multi-language support.
+EOF
+
+# Create desktop entry for system menu
+echo -e "${YELLOW}Creating .desktop entry...${NC}"
+mkdir -p deb_pkg/usr/share/applications
+cat > deb_pkg/usr/share/applications/${PKG_NAME}.desktop <<EOF
+[Desktop Entry]
+Name=AppImage Manager
+Comment=Install, manage and remove AppImage applications
+Exec=/usr/bin/${PKG_NAME}
+Icon=${PKG_NAME}
+Terminal=false
+Type=Application
+Categories=Utility;System;
 EOF
 
 # Build the .deb package

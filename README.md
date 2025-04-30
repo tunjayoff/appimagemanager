@@ -25,7 +25,6 @@ GitHub: [https://github.com/tunjayoff/appimagemanager](https://github.com/tunjay
 - [Translations](#translations)
 - [Theming](#theming)
 - [Build & Installation Script](#build--installation-script)
-- [Development & Testing](#development--testing)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
@@ -102,16 +101,7 @@ chmod +x build_and_install.sh
 appimagemanager
 ```
 
-## Development & Testing
-
-Run unit tests with pytest:
-```bash
-pytest tests/
-```
-Lint with Flake8:
-```bash
-flake8 appimagemanager/
-```
+## Contributing
 
 ## Acknowledgements
 
@@ -172,20 +162,32 @@ Tüm arayüz metinleri `resources/translations_<lang>.json` dosyalarında bulunu
 ## Tema
 Araç çubuğundaki anahtar ile açık/kapalı tema arasında geçiş yapın. Tema tercihleri otomatik kaydedilir.
 
-## Geliştirme & Test
-Birim testlerini pytest ile çalıştırın:
+## Build & Installation Script
+
+A convenience script `build_and_install.sh` automates creating a standalone executable, packaging it into a Debian `.deb`, and installing it system-wide.
+
+Prerequisites:
 ```bash
-pytest tests/
-```
-Flake8 ile lint kontrolü yapın:
-```bash
-flake8 appimagemanager/
+sudo apt update
+sudo apt install -y python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
 ```
 
-## Teşekkürler
-- PyQt6 ve Python 3 ile geliştirildi.
-- Yerel Linux paket yöneticilerinden ilham alındı.
+Usage:
+```bash
+chmod +x build_and_install.sh
+./build_and_install.sh
+# Then launch with:
+appimagemanager
+```
 
-## İletişim
-- Bakımcı: [tunjayoff](https://github.com/tunjayoff)
-- Depo: https://github.com/tunjayoff/appimagemanager 
+## Contributing
+
+## Acknowledgements
+
+- Built with PyQt6 and Python 3.
+- Inspired by native Linux package managers.
+
+## Contact
+
+- Maintainer: [tunjayoff](https://github.com/tunjayoff)
+- Repository: https://github.com/tunjayoff/appimagemanager 
