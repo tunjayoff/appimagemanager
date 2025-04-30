@@ -1,2 +1,1 @@
-PyQt5>=5.15
-ttkthemes>=3.2.2 
+PyQt6>=6.5 

@@ -28,11 +28,14 @@
     "lbl_app_name": "Ad:",
     "lbl_app_version": "Sürüm:",
     "lbl_app_desc": "Açıklama:",
+    "lbl_app_file": "AppImage Dosyası:",
     "lbl_installed_apps": "Kurulu Uygulamalar",
     "lbl_no_apps": "Henüz kurulu uygulama yok",
     "lbl_installation_log": "Kurulum Günlüğü",
     "lbl_search": "Ara:",
     "lbl_sort_by": "Sıralama:",
+    "lbl_no_file_selected": "Dosya seçilmedi",
+    "grp_installation_options": "Kurulum Seçenekleri",
     
     "menu_file": "Dosya",
     "menu_exit": "Çıkış",
@@ -44,6 +47,7 @@
     "menu_documentation": "Dokümantasyon",
     "menu_language": "Dil",
     "menu_view": "Görünüm",
+    "menu_edit": "Düzenle",
     "toggle_dark_mode": "Koyu Modu Aç/Kapat",
     
     "sort_name": "Ad",
@@ -186,5 +190,12 @@
     "Browse for a custom installation directory": "Özel bir yükleme dizini için göz atın",
     "Start the installation process for the selected AppImage": "Seçilen AppImage için yükleme işlemini başlatın",
     "Clear the form and cancel the installation process": "Formu temizleyin ve yükleme işlemini iptal edin",
-    "Hide welcome message": "Karşılama mesajını gizle"
+    "Hide welcome message": "Karşılama mesajını gizle",
+    "Refresh List": "Listeyi Yenile",
+    "Uninstall Selected": "Seçilen Uygulamayı Kaldır",
+    "Run Application": "Uygulamayı Çalıştır",
+    "Search by name, version...": "Ada, sürüme göre ara...",
+    "Application Name": "Uygulama Adı",
+    "Installation Path": "Kurulum Yolu",
+    "Status": "Durum"
 } 

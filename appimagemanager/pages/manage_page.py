@@ -14,10 +14,10 @@ import os
 import shutil # Import shutil for rmtree
 import subprocess # For running applications
 
-import config
-from i18n import get_translator
-from db_manager import DBManager # To interact with the database
-import sudo_helper # ADD THIS IMPORT
+from .. import config
+from ..i18n import get_translator
+from ..db_manager import DBManager # To interact with the database
+from .. import sudo_helper # ADD THIS IMPORT
 # Import other necessary modules like appimage_utils or sudo_helper later
 
 # Get the translator instance

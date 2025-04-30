@@ -28,6 +28,8 @@
     "lbl_app_name": "Name:",
     "lbl_app_version": "Version:",
     "lbl_app_desc": "Description:",
+    "lbl_app_file": "AppImage File:",
+    "lbl_no_file_selected": "No file selected",
     "lbl_installed_apps": "Installed Applications",
     "lbl_no_apps": "No applications installed yet",
     "lbl_installation_log": "Installation Log",
@@ -44,6 +46,7 @@
     "menu_documentation": "Documentation",
     "menu_language": "Language",
     "menu_view": "View",
+    "menu_edit": "Edit",
     "toggle_dark_mode": "Toggle Dark Mode",
     
     "sort_name": "Name",
@@ -186,5 +189,14 @@
     "Browse for a custom installation directory": "Browse for a custom installation directory",
     "Start the installation process for the selected AppImage": "Start the installation process for the selected AppImage",
     "Clear the form and cancel the installation process": "Clear the form and cancel the installation process",
-    "Hide welcome message": "Hide welcome message"
+    "Hide welcome message": "Hide welcome message",
+    "Refresh List": "Refresh List",
+    "Uninstall Selected": "Uninstall Selected",
+    "Run Application": "Run Application",
+    "Search:": "Search:",
+    "Search by name, version...": "Search by name, version...",
+    "Application Name": "Application Name",
+    "Installation Path": "Installation Path",
+    "Status": "Status",
+    "grp_installation_options": "Installation Options"
 } 

@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSpacerItem, QSizePolicy, QFormLayout, QMessageBox)
 from PyQt6.QtCore import Qt
 
-import config
-from i18n import get_translator, AVAILABLE_LANGUAGES # Import AVAILABLE_LANGUAGES dict
+from .. import config
+from ..i18n import get_translator, AVAILABLE_LANGUAGES # Import AVAILABLE_LANGUAGES dict
 
 # Get the translator instance
 translator = get_translator()
@@ -26,6 +26,7 @@ class SettingsPage(QWidget):
 
         # --- Language Settings ---
         language_group = QGroupBox(translator.get_text("Language Settings"))
+        language_group.setObjectName("language_group")
         language_layout = QFormLayout()
         language_layout.setContentsMargins(10, 15, 10, 10)
         language_layout.setSpacing(10)
@@ -48,6 +49,7 @@ class SettingsPage(QWidget):
 
         # --- Default Installation Settings ---
         install_group = QGroupBox(translator.get_text("Default Installation Mode"))
+        install_group.setObjectName("install_group")
         install_layout = QVBoxLayout()
         install_layout.setContentsMargins(10, 15, 10, 10)
         install_layout.setSpacing(10)
@@ -68,6 +70,7 @@ class SettingsPage(QWidget):
 
         # --- Theme Settings ---
         theme_group = QGroupBox(translator.get_text("Theme Settings"))
+        theme_group.setObjectName("theme_group")
         theme_layout = QVBoxLayout()
         theme_layout.setContentsMargins(10, 15, 10, 10)
         theme_layout.setSpacing(10)
@@ -204,18 +207,19 @@ class SettingsPage(QWidget):
         """Update all UI texts for language changes"""
         translator = get_translator()  # Get fresh translator
         
-        # Update group box titles
+        # Update group box titles based on objectName
         for widget in self.findChildren(QGroupBox):
-            if widget.objectName() == "language_group" or "Language" in widget.title():
+            name = widget.objectName()
+            if name == "language_group":
                 widget.setTitle(translator.get_text("Language Settings"))
-            elif widget.objectName() == "install_group" or "Installation" in widget.title():
+            elif name == "install_group":
                 widget.setTitle(translator.get_text("Default Installation Mode"))
-            elif widget.objectName() == "theme_group" or "Theme" in widget.title():
+            elif name == "theme_group":
                 widget.setTitle(translator.get_text("Theme Settings"))
         
         # Update radio buttons
-        self.default_user_radio.setText(translator.get_text("User Installation") + " (~/.local/share)")
-        self.default_system_radio.setText(translator.get_text("System Installation") + " (/opt)")
+        self.default_user_radio.setText(translator.get_text("install_mode_user") + " (~/.local/share)")
+        self.default_system_radio.setText(translator.get_text("install_mode_system") + " (/opt)")
         self.light_theme_radio.setText(translator.get_text("Light Theme"))
         self.dark_theme_radio.setText(translator.get_text("Dark Theme"))
         

@@ -16,7 +16,7 @@ if not logger.hasHandlers():
 
 # --- Translation Files Path ---
 # Default directory where translation files are located
-_TRANSLATIONS_DIR = os.path.dirname(os.path.abspath(__file__))
+_TRANSLATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
 
 # --- Available Languages (scanned from translation files) ---
 def _scan_translation_files():

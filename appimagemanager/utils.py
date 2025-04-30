@@ -6,7 +6,7 @@ Loglama, hata işleme ve diğer yardımcı fonksiyonlar.
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-import config
+from . import config
 
 def setup_logging():
     """Uygulama için loglama yapılandırmasını ayarlar."""

@@ -1,11 +1,11 @@
-from PyQt6.QtWidgets import QWidget, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QPushButton
+from PyQt6.QtWidgets import QWidget, QApplication, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QPushButton, QScrollArea
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
 from PyQt6.QtCore import Qt
 import subprocess
 import webbrowser
 
-import config
-from i18n import _, get_translator
+from .. import config
+from ..i18n import _, get_translator
 
 # Initialize the translator
 translator = get_translator()
@@ -14,7 +14,17 @@ class AboutPage(QWidget):
     """Widget for displaying the About page content."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        # Create a scroll area for About content
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll.setWidget(content)
+        # Main layout for this widget
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll, 1)
+        # Layout for content inside scroll area
+        layout = QVBoxLayout(content)
         layout.setSpacing(20)
         layout.setContentsMargins(30, 30, 30, 30)
 
@@ -87,6 +97,9 @@ class AboutPage(QWidget):
         self.features_group = features_group
         self.feature_labels = []
         features_layout = QVBoxLayout(features_group)
+        # Improve spacing and margins to avoid overlapping text
+        features_layout.setSpacing(12)
+        features_layout.setContentsMargins(15, 15, 15, 15)
         features = [
             _("about_feature_extract"),
             _("about_feature_desktop"),
@@ -96,6 +109,9 @@ class AboutPage(QWidget):
         ]
         for i, feat in enumerate(features):
             lbl = QLabel(feat)
+            lbl.setWordWrap(True)
+            # Add bottom margin for each label
+            lbl.setContentsMargins(0, 0, 0, 8)
             lbl.setObjectName(f"about_feature_{i}")
             # Keep reference for retranslation
             self.feature_labels.append(lbl)
@@ -105,8 +121,9 @@ class AboutPage(QWidget):
         # Developer information
         dev_group = QGroupBox(_("about_developer_info"))
         dev_group.setObjectName("about_developer_group")
-        # Keep reference for retranslation
+        # Keep reference for developer info labels
         self.dev_group = dev_group
+        self.dev_labels = []
         dev_layout = QVBoxLayout(dev_group)
         dev_infos = [
             f"<b>{_('about_developer_name')}:</b> Tuncay Eşsiz",
@@ -118,21 +135,26 @@ class AboutPage(QWidget):
             lbl = QLabel(txt)
             lbl.setObjectName(f"about_dev_info_{i}")
             lbl.setOpenExternalLinks(True)
+            # Keep reference for retranslation
+            self.dev_labels.append(lbl)
             dev_layout.addWidget(lbl)
         layout.addWidget(dev_group)
 
         # System information
         sys_group = QGroupBox(_("about_system_info"))
         sys_group.setObjectName("about_system_group")
-        # Keep reference for retranslation
+        # Keep reference for system info labels and values
         self.sys_group = sys_group
-        sys_layout = QVBoxLayout(sys_group)
         try:
             distro = subprocess.check_output(["lsb_release", "-ds"]).decode().strip().strip('"')
         except:
             distro = "Unknown"
         py_ver = subprocess.check_output(["python3", "--version"]).decode().split()[1]
         qt_ver = QApplication.instance().applicationVersion()
+        # Store values for retranslation
+        self.sys_values = [distro, f"Python {py_ver}", f"Qt {qt_ver}"]
+        self.sys_labels = []
+        sys_layout = QVBoxLayout(sys_group)
         sys_infos = [
             f"<b>{_('about_os')}:</b> {distro}",
             f"<b>{_('about_python')}:</b> Python {py_ver}",
@@ -141,6 +163,8 @@ class AboutPage(QWidget):
         for i, txt in enumerate(sys_infos):
             lbl = QLabel(txt)
             lbl.setObjectName(f"about_sys_info_{i}")
+            # Keep reference for retranslation
+            self.sys_labels.append(lbl)
             sys_layout.addWidget(lbl)
         layout.addWidget(sys_group)
 
@@ -183,4 +207,25 @@ class AboutPage(QWidget):
         self.sys_group.setTitle(translator.get_text("about_system_info"))
         # Buttons
         self.website_btn.setText(translator.get_text("about_website"))
-        self.report_btn.setText(translator.get_text("about_report_issue")) 
+        self.report_btn.setText(translator.get_text("about_report_issue"))
+        # Update developer info labels
+        dev_keys = [
+            "about_developer_name", "about_github_profile",
+            "about_github_project", "about_license"
+        ]
+        for i, lbl in enumerate(self.dev_labels):
+            key = dev_keys[i]
+            if key == "about_developer_name":
+                lbl.setText(f"<b>{translator.get_text(key)}:</b> Tuncay Eşsiz")
+            elif key == "about_github_profile":
+                lbl.setText(f"<b>{translator.get_text(key)}:</b> <a href='https://github.com/tunjayoff'>github.com/tunjayoff</a>")
+            elif key == "about_github_project":
+                lbl.setText(f"<b>{translator.get_text(key)}:</b> <a href='https://github.com/tunjayoff/appimagemanager'>github.com/tunjayoff/appimagemanager</a>")
+            elif key == "about_license":
+                lbl.setText(f"<b>{translator.get_text(key)}:</b> MIT")
+
+        # Update system info labels
+        sys_keys = ["about_os", "about_python", "about_qt"]
+        for i, lbl in enumerate(self.sys_labels):
+            key = sys_keys[i]
+            lbl.setText(f"<b>{translator.get_text(key)}:</b> {self.sys_values[i]}") 

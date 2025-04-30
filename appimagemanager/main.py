@@ -4,6 +4,14 @@ AppImage Manager - Main Application
 Install, manage and remove AppImage applications on Ubuntu 24.04.
 """
 
+if __name__ == "__main__" and __package__ is None:
+    import os, sys
+    # Add project root to sys.path so package imports work when invoked directly
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    __package__ = "appimagemanager"
+
 import sys
 import os
 import logging
@@ -15,22 +23,18 @@ from PyQt6.QtGui import QIcon, QAction, QFont, QPixmap, QDrag, QDragEnterEvent, 
 from PyQt6.QtCore import Qt, QSize, QUrl, QPropertyAnimation, QRect # QRect'i ekledim
 
 # Import application modules
-import config
-import utils
-from i18n import _, get_translator, set_language
+from . import config, utils
+from .i18n import _, get_translator, set_language
 # from main_window import MainWindow  # Import the new PyQt5 main window # Remove old import
 
 # Import page widgets
-from install_page import InstallPage # ADD THIS LINE
-from manage_page import ManagePage # ADD THIS LINE
-from settings_page import SettingsPage # ADD THIS LINE
-from about_page import AboutPage
+from .pages.install_page import InstallPage
+from .pages.manage_page import ManagePage
+from .pages.settings_page import SettingsPage
+from .pages.about_page import AboutPage
 
 # Local imports
-import db_manager
-import appimage_utils
-import sudo_helper # Added
-import i18n # Add this line
+from . import db_manager, appimage_utils, sudo_helper
 
 # Set up logging
 logger = utils.setup_logging()
@@ -250,7 +254,7 @@ class MainWindow(QMainWindow):
             # Get translator instance
             self.translator = get_translator()
             
-            self.setWindowTitle(_("AppImage Manager"))
+            self.setWindowTitle(self.translator.get_text("app_name"))
             self.setGeometry(100, 100, 850, 600) # Adjusted initial size
             self.setWindowIcon(QIcon.fromTheme("application-x-appimage", QIcon(config.WINDOW_ICON)))
             
@@ -338,79 +342,14 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
 
-        # Add theme toggle button - daha büyük ve çekici hale getir
-        self.theme_toggle_button = QToolButton()
-        
-        # Use better theme icons - explicit paths to ensure visibility
-        # Fallback mechanisms for different icon themes
-        self.sun_icon = QIcon.fromTheme("weather-clear")
-        self.moon_icon = QIcon.fromTheme("weather-clear-night")
-        
-        # If system icons not found, try alternative names
-        if self.sun_icon.isNull():
-            self.sun_icon = QIcon.fromTheme("preferences-desktop-display")
-        if self.moon_icon.isNull():
-            self.moon_icon = QIcon.fromTheme("weather-few-clouds-night")
-            
-        # If still null, use fallback character icons
-        if self.sun_icon.isNull() or self.moon_icon.isNull():
-            try:
-                # Create custom icons with unicode characters
-                sun_pixmap = QPixmap(32, 32)
-                if not sun_pixmap.isNull():
-                    sun_pixmap.fill(Qt.GlobalColor.transparent)
-                    sun_painter = QPainter(sun_pixmap)
-                    sun_painter.setPen(QColor(255, 140, 0))  # Turuncu
-                    sun_painter.setFont(QFont("Arial", 24))
-                    sun_painter.drawText(QRect(0, 0, 32, 32), Qt.AlignmentFlag.AlignCenter, "☀")
-                    sun_painter.end()  # Ensure the painter is properly closed
-                    self.sun_icon = QIcon(sun_pixmap)
-                
-                moon_pixmap = QPixmap(32, 32)
-                if not moon_pixmap.isNull():
-                    moon_pixmap.fill(Qt.GlobalColor.transparent)
-                    moon_painter = QPainter(moon_pixmap)
-                    moon_painter.setPen(QColor(200, 200, 255))  # Açık mavi
-                    moon_painter.setFont(QFont("Arial", 24))
-                    moon_painter.drawText(QRect(0, 0, 32, 32), Qt.AlignmentFlag.AlignCenter, "☽")
-                    moon_painter.end()  # Ensure the painter is properly closed
-                    self.moon_icon = QIcon(moon_pixmap)
-            except Exception as e:
-                logger.error(f"Error creating custom theme icons: {e}")
-                # Fallback to text based icons if all else fails
-                self.sun_icon = QIcon.fromTheme("application-x-executable")
-                self.moon_icon = QIcon.fromTheme("application-x-executable")
-        
-        # Set up the initial icon based on theme
-        # Final null icon check - assign a default if all fallbacks failed
-        if self.sun_icon.isNull():
-            self.sun_icon = QIcon()
-        if self.moon_icon.isNull():
-            self.moon_icon = QIcon()
-
-        self.theme_toggle_button.setIcon(self.moon_icon if self.dark_mode else self.sun_icon)
-        
-        # Make button bigger and more visible
-        self.theme_toggle_button.setIconSize(QSize(32, 32))
-        self.theme_toggle_button.setMinimumSize(QSize(44, 44))
+        # Add animated toggle switch for dark mode
+        from .widgets import ToggleSwitch
+        self.theme_toggle_button = ToggleSwitch()
+        # Initialize switch state
+        self.theme_toggle_button.setChecked(self.dark_mode)
         self.theme_toggle_button.setToolTip(self.translator.get_text("toggle_dark_mode"))
-        self.theme_toggle_button.clicked.connect(self.toggle_theme)
-        
-        # Style button to be more visible
-        self.theme_toggle_button.setStyleSheet("""
-            QToolButton { 
-                border: none;
-                padding: 8px;
-                background-color: transparent;
-                border-radius: 22px;
-            }
-            QToolButton:hover { 
-                background-color: rgba(128, 128, 128, 0.2);
-            }
-            QToolButton:pressed { 
-                background-color: rgba(128, 128, 128, 0.3);
-            }
-        """)
+        # Connect toggle event to theme change
+        self.theme_toggle_button.toggled.connect(self.toggle_theme)
         toolbar.addWidget(self.theme_toggle_button)
         
         # Add some padding after the button
@@ -455,10 +394,10 @@ class MainWindow(QMainWindow):
     def populate_sidebar(self):
         """Adds items to the sidebar."""
         items_data = [
-            {"text": _("Install"), "icon": "document-new", "page_index": 0},
-            {"text": _("Manage"), "icon": "preferences-system", "page_index": 1},
-            {"text": _("Settings"), "icon": "preferences-desktop", "page_index": 2},
-            {"text": _("About"), "icon": "help-about", "page_index": 3} # Add About item
+            {"text": _("tab_install"), "icon": "document-new", "page_index": 0},
+            {"text": _("tab_manage"), "icon": "preferences-system", "page_index": 1},
+            {"text": _("menu_settings"), "icon": "preferences-desktop", "page_index": 2},
+            {"text": _("tab_about"), "icon": "help-about", "page_index": 3} # Add About item
         ]
 
         for item_data in items_data:
@@ -482,9 +421,38 @@ class MainWindow(QMainWindow):
     def create_menus(self):
         """Creates the main menu bar."""
         menu_bar = self.menuBar()
+        # Theme-aware hover and selection styling for menu bar
+        if self.dark_mode:
+            hover_color = 'rgba(255, 255, 255, 0.3)'
+            pressed_color = 'rgba(255, 255, 255, 0.45)'
+            selection_color = 'rgba(255, 255, 255, 0.25)'
+        else:
+            hover_color = 'rgba(0, 0, 0, 0.08)'
+            pressed_color = 'rgba(0, 0, 0, 0.12)'
+            selection_color = 'rgba(0, 0, 0, 0.1)'
+        menu_bar.setStyleSheet(f"""
+QMenuBar::item {{
+    spacing: 3px;
+    padding: 4px 12px;
+    background: transparent;
+}}
+QMenuBar::item:hover {{
+    background: {hover_color};
+}}
+QMenuBar::item:pressed {{
+    background: {pressed_color};
+}}
+QMenu::item {{
+    padding: 6px 20px;
+    background: transparent;
+}}
+QMenu::item:selected {{
+    background: {selection_color};
+}}
+""")
 
         # --- File Menu ---
-        file_menu = menu_bar.addMenu(_("&File"))
+        file_menu = menu_bar.addMenu(self.translator.get_text("menu_file"))
 
         install_action = QAction(QIcon.fromTheme("document-new"), _("&Install AppImage..."), self)
         install_action.setStatusTip(_("Install a new AppImage"))
@@ -506,14 +474,14 @@ class MainWindow(QMainWindow):
         view_menu.addAction(theme_action)
 
         # --- Edit Menu (Placeholder/Example) ---
-        edit_menu = menu_bar.addMenu(_("&Edit"))
+        edit_menu = menu_bar.addMenu(self.translator.get_text("menu_edit"))
         settings_action = QAction(QIcon.fromTheme("preferences-desktop"), _("&Preferences"), self)
         settings_action.setStatusTip(_("Application settings"))
         settings_action.triggered.connect(self.select_settings_page) # Go to settings page
         edit_menu.addAction(settings_action)
 
         # --- Help Menu ---
-        help_menu = menu_bar.addMenu(_("&Help"))
+        help_menu = menu_bar.addMenu(self.translator.get_text("menu_help"))
         about_action = QAction(QIcon.fromTheme("help-about"), _("&About"), self)
         about_action.setStatusTip(_("Show application information"))
         about_action.triggered.connect(self.select_about_page) # Go to about page
@@ -521,7 +489,7 @@ class MainWindow(QMainWindow):
 
     def create_status_bar(self):
         """Creates the status bar."""
-        self.statusBar().showMessage(_("Ready"))
+        self.statusBar().showMessage(self.translator.get_text("status_ready"))
 
     def select_install_page(self):
         """Selects the Install item in the sidebar."""
@@ -714,20 +682,15 @@ class MainWindow(QMainWindow):
         logger.info("Updating UI texts for language change...")
         
         # Update window title
-        self.setWindowTitle(_("AppImage Manager"))
+        self.setWindowTitle(self.translator.get_text("app_name"))
         
-        # Update sidebar items
-        sidebar_texts = [
-            _("Install"),
-            _("Manage"),
-            _("Settings"),
-            _("About")
-        ]
-        
-        for i in range(self.sidebar.count()):
-            item = self.sidebar.item(i)
-            if item and i < len(sidebar_texts):
-                item.setText(sidebar_texts[i])
+        # Update sidebar items using translation keys
+        sidebar_keys = ["tab_install", "tab_manage", "menu_settings", "tab_about"]
+        for i, key in enumerate(sidebar_keys):
+            if i < self.sidebar.count():
+                item = self.sidebar.item(i)
+                if item:
+                    item.setText(self.translator.get_text(key))
         
         # Update theme toggle tooltip
         self.theme_toggle_button.setToolTip(self.translator.get_text("toggle_dark_mode"))
@@ -736,12 +699,11 @@ class MainWindow(QMainWindow):
         menu_bar = self.menuBar()
         if menu_bar:
             actions = menu_bar.actions()
-            menu_texts = [_("&File"), self.translator.get_text("menu_view"), _("&Edit"), _("&Help")]
-            
-            # Main menus
-            for i, menu_text in enumerate(menu_texts):
-                if i < len(actions):
-                    actions[i].setText(menu_text)
+            # Update main menu labels using translation keys
+            menu_keys = ["menu_file", "menu_view", "menu_edit", "menu_help"]
+            for idx, key in enumerate(menu_keys):
+                if idx < len(actions):
+                    actions[idx].setText(self.translator.get_text(key))
             
             # File menu actions
             if len(actions) > 0:
@@ -789,7 +751,7 @@ class MainWindow(QMainWindow):
                         help_actions[0].setStatusTip(_("Show application information"))
         
         # Update status bar
-        self.statusBar().showMessage(_("Ready"))
+        self.statusBar().showMessage(self.translator.get_text("status_ready"))
         
         # Force update the content pages
         if hasattr(self, 'install_page') and hasattr(self.install_page, 'retranslateUi'):

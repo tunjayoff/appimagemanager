@@ -14,7 +14,7 @@ import traceback
 import re # Import re for sanitizing names
 from pathlib import Path
 
-import config
+from . import config
 
 logger = logging.getLogger(__name__)
 

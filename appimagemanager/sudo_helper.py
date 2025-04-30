@@ -11,7 +11,7 @@ import os
 import sys
 import tempfile
 
-from i18n import _
+from .i18n import _
 
 logger = logging.getLogger(__name__)
 

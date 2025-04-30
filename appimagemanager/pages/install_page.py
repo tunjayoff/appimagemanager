@@ -8,13 +8,14 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdi
                              QProgressBar, QSpacerItem, QSizePolicy, QFormLayout)
 from PyQt6.QtCore import Qt, QTimer
 import os
+from PyQt6.QtGui import QIcon
 
-import config
+from .. import config
 # from i18n import _ # Remove this import
-from i18n import get_translator # Import the getter function
-from appimage_utils import AppImageInstaller # ADD THIS IMPORT
-from db_manager import DBManager # ADD THIS IMPORT
-import sudo_helper # ADD THIS IMPORT
+from ..i18n import get_translator # Import the getter function
+from ..appimage_utils import AppImageInstaller # ADD THIS IMPORT
+from ..db_manager import DBManager # ADD THIS IMPORT
+from .. import sudo_helper # ADD THIS IMPORT
 
 # Get the translator instance
 translator = get_translator()
@@ -31,20 +32,22 @@ class InstallPage(QWidget):
 
         # --- File Selection ---
         file_selection_layout = QHBoxLayout()
-        self.select_file_button = QPushButton(translator.get_text("Select AppImage File..."))
+        # File selection label
+        self.file_label = QLabel(translator.get_text("lbl_app_file"))
+        self.select_file_button = QPushButton(translator.get_text("btn_select_appimage"))
         self.select_file_button.clicked.connect(self.select_file)
         self.selected_file_label = QLineEdit()
-        self.selected_file_label.setPlaceholderText(translator.get_text("No file selected"))
+        self.selected_file_label.setPlaceholderText(translator.get_text("lbl_no_file_selected"))
         self.selected_file_label.setReadOnly(True)
         
-        file_selection_layout.addWidget(QLabel(translator.get_text("AppImage File:")))
+        file_selection_layout.addWidget(self.file_label)
         file_selection_layout.addWidget(self.selected_file_label)
         file_selection_layout.addWidget(self.select_file_button)
         main_layout.addLayout(file_selection_layout)
         main_layout.addSpacing(15) # Add spacing after file selection
 
         # --- AppImage Information (Placeholders) ---
-        self.info_group = QGroupBox(translator.get_text("AppImage Information"))
+        self.info_group = QGroupBox(translator.get_text("lbl_app_info"))
         info_layout = QFormLayout() # Use QFormLayout for better alignment
         info_layout.setContentsMargins(10, 15, 10, 10) # Add margins inside groupbox
         info_layout.setSpacing(10) # Spacing between rows
@@ -62,16 +65,16 @@ class InstallPage(QWidget):
         main_layout.addSpacing(15) # Add spacing after info group
 
         # --- Installation Options ---
-        self.options_group = QGroupBox(translator.get_text("Installation Options"))
+        self.options_group = QGroupBox(translator.get_text("grp_installation_options"))
         options_layout = QVBoxLayout()
         options_layout.setContentsMargins(10, 15, 10, 10) # Add margins inside groupbox
         options_layout.setSpacing(10) # Spacing between elements
         
         # Install Mode
         mode_layout = QHBoxLayout()
-        self.user_mode_radio = QRadioButton(translator.get_text("User Installation") + f" ({config.INSTALL_DESTINATIONS['user']['description']})")
-        self.system_mode_radio = QRadioButton(translator.get_text("System Installation") + f" ({config.INSTALL_DESTINATIONS['system']['description']})")
-        self.custom_mode_radio = QRadioButton(translator.get_text("Custom Location"))
+        self.user_mode_radio = QRadioButton(translator.get_text("install_mode_user"))
+        self.system_mode_radio = QRadioButton(translator.get_text("install_mode_system"))
+        self.custom_mode_radio = QRadioButton(translator.get_text("install_mode_custom"))
         
         self.user_mode_radio.setChecked(config.DEFAULT_INSTALL_MODE == "user")
         self.system_mode_radio.setChecked(config.DEFAULT_INSTALL_MODE == "system")
@@ -85,9 +88,12 @@ class InstallPage(QWidget):
         # Custom Path (Initially hidden)
         self.custom_path_layout = QHBoxLayout()
         self.custom_path_input = QLineEdit()
-        self.custom_path_button = QPushButton("...") # Browse button
+        # Browse button for custom installation directory
+        self.custom_path_button = QPushButton(translator.get_text("btn_browse"))
+        self.custom_path_button.setIcon(QIcon.fromTheme("folder-open"))
         self.custom_path_input.setPlaceholderText(translator.get_text("Select custom installation directory"))
-        self.custom_path_button.setFixedWidth(30)
+        # Adjust button size
+        self.custom_path_button.setMinimumWidth(80)
         self.custom_path_layout.addWidget(QLabel(translator.get_text("Path:")))
         self.custom_path_layout.addWidget(self.custom_path_input)
         self.custom_path_layout.addWidget(self.custom_path_button)
@@ -109,7 +115,7 @@ class InstallPage(QWidget):
         main_layout.addSpacing(20) # Add spacing before install button
 
         # --- Install Button ---
-        self.install_button = QPushButton(translator.get_text("Install"))
+        self.install_button = QPushButton(translator.get_text("btn_install"))
         self.install_button.setEnabled(False) # Disabled until file selected
         self.install_button.clicked.connect(self.start_installation) # Connect to placeholder
         main_layout.addWidget(self.install_button, alignment=Qt.AlignmentFlag.AlignRight)
@@ -364,23 +370,27 @@ class InstallPage(QWidget):
     def retranslateUi(self):
         """Update all UI texts for language changes"""
         translator = get_translator()  # Get fresh translator
+        # Retranslate file selection controls
+        self.file_label.setText(translator.get_text("lbl_app_file"))
+        self.selected_file_label.setPlaceholderText(translator.get_text("lbl_no_file_selected"))
+        self.select_file_button.setText(translator.get_text("btn_select_appimage"))
+        # Retranslate info and options group titles
+        self.info_group.setTitle(translator.get_text("lbl_app_info"))
+        self.options_group.setTitle(translator.get_text("grp_installation_options"))
+        # Retranslate installation mode options
+        self.user_mode_radio.setText(translator.get_text("install_mode_user"))
+        self.system_mode_radio.setText(translator.get_text("install_mode_system"))
+        self.custom_mode_radio.setText(translator.get_text("install_mode_custom"))
 
         # Update group box titles
-        self.info_group.setTitle(translator.get_text("AppImage Information"))
-        self.options_group.setTitle(translator.get_text("Installation Options"))
-
-        # Update radio buttons
-        self.user_mode_radio.setText(translator.get_text("User Installation") + f" ({config.INSTALL_DESTINATIONS['user']['description']})")
-        self.system_mode_radio.setText(translator.get_text("System Installation") + f" ({config.INSTALL_DESTINATIONS['system']['description']})")
-        self.custom_mode_radio.setText(translator.get_text("Custom Location"))
+        self.info_group.setTitle(translator.get_text("lbl_app_info"))
+        self.options_group.setTitle(translator.get_text("grp_installation_options"))
 
         # Update buttons
-        self.select_file_button.setText(translator.get_text("Select AppImage File..."))
-        self.custom_path_button.setText("...")
-        self.install_button.setText(translator.get_text("Install"))
+        self.custom_path_button.setText(translator.get_text("btn_browse"))
+        self.install_button.setText(translator.get_text("btn_install"))
 
         # Update labels
-        self.selected_file_label.setPlaceholderText(translator.get_text("No file selected"))
         self.custom_path_input.setPlaceholderText(translator.get_text("Select custom installation directory"))
 
         # FormLayout labels
