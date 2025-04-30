@@ -200,4 +200,5 @@ def _(key, default=None, **replacements):
     return text
 
 # --- Force initial load of default language ---
-get_translator() 
+get_translator()
+# End of file. 

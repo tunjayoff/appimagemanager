@@ -313,6 +313,10 @@ class MainWindow(QMainWindow):
             # --- Initial Checks ---
             self.perform_initial_checks()
             
+            # --- Apply theme again AFTER all widgets are created ---
+            # Ensures toolbar button gets themed correctly on startup
+            self.update_theme()
+            
             logger.info(_("Application started successfully."))
         except Exception as e:
             logger.error(f"Error during main window initialization: {e}", exc_info=True)
@@ -345,13 +349,10 @@ class MainWindow(QMainWindow):
         # Add animated toggle switch for dark mode
         from .widgets import ToggleSwitch
         self.theme_toggle_button = ToggleSwitch()
-        # Prepare theme icons for toggle
-        self.sun_icon = QIcon.fromTheme("weather-clear")
-        self.moon_icon = QIcon.fromTheme("weather-clear-night")
-        # Set initial toggle icon based on current theme
-        self.theme_toggle_button.setIcon(self.moon_icon if self.dark_mode else self.sun_icon)
         # Initialize switch state
         self.theme_toggle_button.setChecked(self.dark_mode)
+        # Force an update to ensure initial paint reflects the state
+        self.theme_toggle_button.update()
         self.theme_toggle_button.setToolTip(self.translator.get_text("toggle_dark_mode"))
         # Connect toggle event to theme change
         self.theme_toggle_button.toggled.connect(self.toggle_theme)
@@ -663,9 +664,6 @@ QMenu::item:selected {{
         self.fade_animation.setEndValue(0.95)
         self.fade_animation.finished.connect(self._complete_theme_change)
         self.fade_animation.start()
-        
-        # Update the toggle button icon immediately for better feedback
-        self.theme_toggle_button.setIcon(self.moon_icon if self.dark_mode else self.sun_icon)
         
         theme_name = "Dark" if self.dark_mode else "Light"
         self.statusBar().showMessage(self.translator.get_text("Theme switched to {theme_name}").format(theme_name=theme_name))

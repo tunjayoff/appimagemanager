@@ -9,18 +9,26 @@ class ToggleSwitch(QCheckBox):
         super().__init__(parent)
         self.setContentsMargins(0, 0, 0, 0)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._circle_position = 2
+        # Set initial position based on default checked state (usually False)
+        self._circle_position = 2 # Initial position for unchecked state
         # Animation for sliding circle
         self._animation = QPropertyAnimation(self, b"circle_position", self)
         self._animation.setDuration(200)
         self._animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        # Connect signal AFTER initial state might be set
         self.toggled.connect(self._start_animation)
-        # Ensure initial position
-        self._start_animation()
+        # DO NOT CALL _start_animation() here initially
 
     def _start_animation(self):
-        start = self._circle_position
+        # Always calculate end based on the CURRENT checked state
         end = self.width() - self.height() + 2 if self.isChecked() else 2
+        start = self._circle_position # Start from current visual position
+
+        # If the animation is already running for the *same* target, don't restart
+        # (This might prevent issues if setChecked triggers toggled signal internally)
+        if self._animation.state() == QPropertyAnimation.State.Running and self._animation.endValue() == end:
+             return
+
         self._animation.stop()
         self._animation.setStartValue(start)
         self._animation.setEndValue(end)
@@ -29,26 +37,52 @@ class ToggleSwitch(QCheckBox):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Get dimensions (ensure height > 4 for calculations)
+        rect = self.rect()
+        h = max(rect.height(), 5) # Use at least 5 to avoid division by zero or negative radius
+        w = rect.width()
+        diameter = h - 4
+        radius = diameter / 2.0
+        
         # Draw background
         bg_color = QColor("#007AFF") if self.isChecked() else QColor("#ccc")
         painter.setBrush(bg_color)
         painter.setPen(Qt.PenStyle.NoPen)
-        rect = self.rect()
-        painter.drawRoundedRect(rect, rect.height()/2, rect.height()/2)
+        painter.drawRoundedRect(rect, h / 2, h / 2)
+        
         # Draw sliding circle
-        diameter = rect.height() - 4
-        circle_rect = QRect(self._circle_position, 2, diameter, diameter)
+        # Ensure circle position is valid given current width
+        # Clamp position to be within bounds [2, w - h + 2]
+        max_pos = w - h + 2
+        current_pos = max(2, min(self._circle_position, max_pos)) 
+        circle_rect = QRect(int(current_pos), 2, diameter, diameter)
         painter.setBrush(QColor("#ffffff"))
         painter.drawEllipse(circle_rect)
-        # Draw icon
-        painter.setPen(QColor("#007AFF") if self.isChecked() else QColor("#666"))
-        font = QFont()
-        font.setPointSize(int(diameter * 0.55))
-        painter.setFont(font)
-        symbol = "☾" if self.isChecked() else "☀"
-        painter.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, symbol)
+        
+        # Draw icon if diameter is large enough
+        if diameter > 5:
+             painter.setPen(QColor("#007AFF") if self.isChecked() else QColor("#666"))
+             font = QFont()
+             font.setPointSize(int(diameter * 0.55))
+             painter.setFont(font)
+             symbol = "☾" if self.isChecked() else "☀"
+             painter.drawText(circle_rect, Qt.AlignmentFlag.AlignCenter, symbol)
+             
         painter.end()
 
+    # Add resizeEvent to correctly set initial position
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Update circle position *without* animation when resized/first shown,
+        # based on the current logical state.
+        # Use the final width/height from the event or self.
+        end_pos = self.width() - self.height() + 2 if self.isChecked() else 2
+        # Only update if the position calculation is valid (width >= height)
+        if self.width() >= self.height():
+            self._circle_position = end_pos
+            # No need to call self.update() here, resizeEvent implies a repaint
+        
     def get_circle_position(self):
         return self._circle_position
 

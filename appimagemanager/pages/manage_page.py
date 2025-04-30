@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QTableWidget, QTableWidgetItem, 
                              QAbstractItemView, QHeaderView, QMessageBox,
                              QProgressBar, QApplication, QToolButton, QSizePolicy,
-                             QLineEdit)
+                             QLineEdit, QDialog, QListWidget, QCheckBox, 
+                             QDialogButtonBox, QListWidgetItem)
 from PyQt6.QtGui import QIcon, QColor, QPixmap
 from PyQt6.QtCore import Qt, QTimer, QSize
 import os
@@ -18,6 +19,7 @@ from .. import config
 from ..i18n import get_translator
 from ..db_manager import DBManager # To interact with the database
 from .. import sudo_helper # ADD THIS IMPORT
+from .. import appimage_utils # Import appimage_utils for leftover functions
 # Import other necessary modules like appimage_utils or sudo_helper later
 
 # Get the translator instance
@@ -364,139 +366,153 @@ class ManagePage(QWidget):
 
         # --- Start Uninstallation --- 
         self.show_loading(True, translator.get_text("Uninstalling {app_name}...").format(app_name=app_name))
+        uninstallation_successful = False # Flag to track overall success for leftover check
+        db_removal_done = False # Flag to track if DB part is done
+        
         try:
             db = DBManager()
             app_info = db.get_app(app_id)
+            
+            # --- Handle missing entry cases (slightly adapted logic) ---
             if not app_info and app_id:
-                 # Should not happen if list is correct and app_id exists, but handle defensively
-                 logger.error(f"App info not found in DB for ID: {app_id} despite being in table. Removing potentially stale entry.")
-                 if db.remove_app(app_id): # Try removing by ID anyway
+                 # Stale entry with ID
+                 logger.error(f"App info not found in DB for ID: {app_id}. Removing stale entry.")
+                 if db.remove_app(app_id):
                       QMessageBox.information(self, translator.get_text("Stale Entry Removed"), translator.get_text("Removed stale database entry for '{app_name}'.").format(app_name=app_name))
+                      uninstallation_successful = True # Consider this a success for potential leftover check
+                      db_removal_done = True
                  else:
                       QMessageBox.warning(self, translator.get_text("Error"), translator.get_text("Could not remove stale database entry."))
-                 self.refresh_app_list()
-                 return
+                 # No files to remove here, proceed to finally block
+                 
             elif not app_info and not app_id and is_missing:
-                 # This is the case where ID is None, files are missing, and we confirmed removal
-                 logger.warning(f"Attempting to remove entry for '{app_name}' without an ID.")
-                 # We need to manually find and remove the entry from the list
+                 # Corrupt entry without ID, files missing
+                 logger.warning(f"Attempting to remove corrupt entry for '{app_name}' (no ID, files missing).")
                  all_apps = db.get_all_apps()
                  original_count = len(all_apps)
-                 # Find the entry matching the name, missing ID, and likely missing path
-                 # This assumes name is unique enough for this edge case
                  apps_to_keep = [app for app in all_apps 
                                  if not (app.get('name') == app_name and app.get('id') is None)]
                  
                  if len(apps_to_keep) < original_count:
                      db.data['installed_apps'] = apps_to_keep
                      if db._save_db():
-                         logger.info(f"Successfully removed entry for '{app_name}' (without ID).")
-                         self._cleanup_icon_files(app_name.lower())  # Clean up icon files anyway
+                         logger.info(f"Successfully removed corrupt entry for '{app_name}'.")
+                         # No actual files removed, but consider DB cleaned
+                         uninstallation_successful = True 
+                         db_removal_done = True
                          QMessageBox.information(self, translator.get_text("Entry Removed"), 
-                                                 translator.get_text("Removed database entry for '{app_name}'.").format(app_name=app_name))
+                                                 translator.get_text("Removed corrupt database entry for '{app_name}'.").format(app_name=app_name))
                      else:
-                         logger.error(f"Failed to save database after removing entry for '{app_name}' (without ID).")
+                         logger.error(f"Failed to save database after removing corrupt entry for '{app_name}'.")
                          QMessageBox.critical(self, translator.get_text("Database Error"), translator.get_text("Failed to save the database after removing the entry."))
                  else:
-                     logger.error(f"Could not find the specific entry for '{app_name}' (without ID) to remove.")
+                     logger.error(f"Could not find the corrupt entry for '{app_name}' to remove.")
                      QMessageBox.warning(self, translator.get_text("Error"), translator.get_text("Could not find the database entry to remove."))
-                 self.refresh_app_list()
-                 return
-            # If app_info exists (meaning app_id was likely valid), proceed as before
-
-            # --- File/Symlink Removal (only if not missing) --- 
-            files_removed_successfully = False
-            if not is_missing:
-                logger.info("Attempting to remove application files and symlinks...")
-                install_dir = app_info.get("app_install_dir")
-                symlinks = app_info.get("symlinks_created", [])
-                install_mode = app_info.get("install_mode", "unknown") # Need mode to check for root
-                icon_name = app_info.get("name", "").lower()  # For cleaning up icon files
-                
-                # Determine if root is needed (Simplified check - relies on stored install_mode)
-                requires_root = (install_mode == "system") 
-                # TODO: Add more robust check for custom installs based on path permissions if needed
-
-                commands_to_run = []
-                non_root_operations = []
-
-                # Prepare operations/commands
-                for link in symlinks:
-                    if link: # Ensure link path is not empty
-                        if requires_root:
-                            commands_to_run.append(f"rm -f \"{link}\"")
-                        else:
-                            non_root_operations.append(("remove_file", link))
-                
-                if install_dir and os.path.exists(install_dir): # Check existence again
-                    if requires_root:
-                        commands_to_run.append(f"rm -rf \"{install_dir}\"")
-                    else:
-                        non_root_operations.append(("remove_dir", install_dir))
-
-                # Execute operations
-                operation_success = True
-                if requires_root:
-                    if commands_to_run:
-                        logger.debug(f"Executing uninstall commands with sudo: {commands_to_run}")
-                        sudo_success, output = sudo_helper.execute_commands_with_sudo(commands_to_run)
-                        if not sudo_success:
-                            logger.error(f"Sudo uninstall commands failed. Output: {output}")
-                            QMessageBox.critical(self, translator.get_text("Uninstall Error"), translator.get_text("Failed to remove application files/links (requires root). Check logs."))
-                            operation_success = False
-                        else:
-                            logger.info("Sudo uninstall commands executed successfully.")
-                            # For root installs, we need to clean up icon files separately
-                            if icon_name:
-                                self._cleanup_icon_files(icon_name)
-                    else:
-                         logger.info("No root commands needed for uninstallation (System mode but maybe no files/links found).")
-                else: # Non-root operations
-                    for op_type, path in non_root_operations:
-                        try:
-                            if op_type == "remove_file" and os.path.lexists(path):
-                                os.remove(path)
-                                logger.info(f"Removed symlink: {path}")
-                            elif op_type == "remove_dir" and os.path.exists(path):
-                                shutil.rmtree(path)
-                                logger.info(f"Removed directory: {path}")
-                        except OSError as os_err:
-                             logger.error(f"Error during non-root removal of {path}: {os_err}")
-                             QMessageBox.warning(self, translator.get_text("Uninstall Warning"), translator.get_text("Could not remove some files/links: {path}. Please check manually.").format(path=path))
-                             # Don't necessarily fail the whole process for one file error
-                             # operation_success = False 
-                    
-                    # For non-root installs, clean up icon files after main operations
-                    if icon_name:
-                        self._cleanup_icon_files(icon_name)
-                
-                files_removed_successfully = operation_success
-            else:
-                 logger.info("Files marked as missing, skipping file/symlink removal.")
-                 # Even if files are missing, we should still clean up icon files if possible
-                 if app_info and app_info.get("name"):
-                     self._cleanup_icon_files(app_info.get("name").lower())
-                 files_removed_successfully = True # Treat as success for DB removal step
-
-            # --- Remove from Database --- 
-            if files_removed_successfully:
-                 logger.info(f"Removing application '{app_name}' from database...")
-                 if app_id and db.remove_app(app_id):
-                     logger.info("Successfully removed app from database.")
-                     self.show_loading(False, translator.get_text("Uninstallation of {app_name} completed").format(app_name=app_name))
-                     QMessageBox.information(self, translator.get_text("Uninstall Successful"), 
-                                             translator.get_text("'{app_name}' has been successfully uninstalled.").format(app_name=app_name))
-                 elif not app_id and is_missing: # Case handled above, this is just a confirmation message path
-                     pass # Message already shown or error occurred during manual removal
-                 else: # Failed to remove by ID or other error
-                     logger.error(f"Removed files (or skipped), but failed to remove app from database (ID: {app_id})")
-                     self.show_loading(False, translator.get_text("Error updating database"))
-                     QMessageBox.critical(self, translator.get_text("Database Error"), translator.get_text("Removed application files, but failed to update the database. Please refresh."))
-            else:
-                 # Error message was shown during file removal failure
-                 logger.warning("Skipping database removal because file/symlink removal failed.")
-                 self.show_loading(False, translator.get_text("Uninstallation failed"))
+                 # Proceed to finally block
                  
+            elif app_info: # App found in DB (normal case or missing files case with ID)
+                # --- File/Symlink Removal --- 
+                files_removed_successfully = False
+                uninstaller = appimage_utils.AppImageUninstaller(app_info) # Use the uninstaller class
+                
+                if not is_missing:
+                    logger.info("Attempting to remove application files and symlinks...")
+                    if uninstaller.requires_root:
+                        commands = uninstaller.get_uninstall_commands()
+                        if commands:
+                             logger.debug(f"Executing uninstall commands with sudo: {commands}")
+                             # Make sure sudo_helper is imported and works
+                             try:
+                                 sudo_success, output = sudo_helper.execute_commands_with_sudo(commands)
+                                 if sudo_success:
+                                     logger.info("Sudo uninstall commands executed successfully.")
+                                     files_removed_successfully = True
+                                 else:
+                                     logger.error(f"Sudo uninstall commands failed. Output: {output}")
+                                     QMessageBox.critical(self, translator.get_text("Uninstall Error"), translator.get_text("Failed to remove application files/links (requires root). Check logs."))
+                             except Exception as sudo_err:
+                                  logger.error(f"Error executing sudo commands: {sudo_err}", exc_info=True)
+                                  QMessageBox.critical(self, translator.get_text("Sudo Error"), translator.get_text("An error occurred while trying to run commands with root privileges."))
+                        else:
+                             logger.warning("Root required, but no uninstall commands generated.")
+                             # Maybe some files were already gone? Treat as success for DB removal.
+                             files_removed_successfully = True 
+                    else: # Non-root uninstall
+                        if uninstaller.uninstall(): # Call the direct uninstall method
+                            logger.info("Non-root uninstallation successful.")
+                            files_removed_successfully = True
+                        else:
+                            logger.error("Non-root uninstallation failed or partially failed.")
+                            QMessageBox.warning(self, translator.get_text("Uninstall Warning"), translator.get_text("Could not remove some files/links. Please check logs or filesystem manually."))
+                            # Even if partial failure, proceed to DB removal
+                            files_removed_successfully = True # Allow DB removal attempt
+                else:
+                     logger.info("Files marked as missing, skipping file/symlink removal.")
+                     files_removed_successfully = True # Treat as success for DB removal step
+
+                # --- Remove from Database --- 
+                if files_removed_successfully:
+                     logger.info(f"Removing application '{app_name}' from database...")
+                     if app_id and db.remove_app(app_id):
+                         logger.info("Successfully removed app from database.")
+                         # Mark overall success for leftover check
+                         uninstallation_successful = True 
+                         db_removal_done = True
+                         # Don't show final message yet, check for leftovers first
+                         # QMessageBox.information(self, translator.get_text("Uninstall Successful"), ...) 
+                     else:
+                         logger.error(f"Removed files (or skipped), but failed to remove app from database (ID: {app_id})")
+                         QMessageBox.critical(self, translator.get_text("Database Error"), translator.get_text("Removed application files, but failed to update the database. Please refresh."))
+                else:
+                     # Error message shown during file removal failure
+                     logger.warning("Skipping database removal because file/symlink removal failed.")
+
+            # --- Check for Leftovers (if uninstallation including DB removal was successful) ---
+            if uninstallation_successful and db_removal_done:
+                 logger.info(f"Checking for potential leftovers for '{app_name}'...")
+                 try:
+                     potential_leftovers = appimage_utils.find_leftovers(app_name)
+                     if potential_leftovers:
+                          logger.info(f"Found {len(potential_leftovers)} potential leftover items.")
+                          dialog = LeftoverDialog(potential_leftovers, self)
+                          if dialog.exec() == QDialog.DialogCode.Accepted:
+                               selected_to_remove = dialog.get_selected_paths()
+                               if selected_to_remove:
+                                   logger.info(f"User chose to remove {len(selected_to_remove)} leftover items.")
+                                   success, removed_count = appimage_utils.remove_selected_leftovers(selected_to_remove)
+                                   if success:
+                                       QMessageBox.information(self, translator.get_text("Leftovers Removed"),
+                                                               translator.get_text("{count} leftover items removed successfully.").format(count=removed_count))
+                                   else:
+                                       QMessageBox.warning(self, translator.get_text("Leftover Removal Error"),
+                                                           translator.get_text("Failed to remove some or all selected leftover items. Check logs."))
+                               else:
+                                   logger.info("User did not select any leftovers to remove.")
+                          else:
+                               logger.info("User cancelled leftover removal.")
+                               
+                          # Show final success message AFTER leftover check
+                          self.show_loading(False, translator.get_text("Uninstallation of {app_name} completed").format(app_name=app_name))
+                          QMessageBox.information(self, translator.get_text("Uninstall Successful"), 
+                                                  translator.get_text("'{app_name}' has been successfully uninstalled.").format(app_name=app_name))
+                     else:
+                          logger.info("No potential leftovers found.")
+                          # Show final success message if no leftovers found
+                          self.show_loading(False, translator.get_text("Uninstallation of {app_name} completed").format(app_name=app_name))
+                          QMessageBox.information(self, translator.get_text("Uninstall Successful"), 
+                                                  translator.get_text("'{app_name}' has been successfully uninstalled.").format(app_name=app_name))
+                 except Exception as leftover_err:
+                      logger.error(f"Error during leftover check/removal: {leftover_err}", exc_info=True)
+                      QMessageBox.warning(self, translator.get_text("Leftover Check Error"),
+                                          translator.get_text("An error occurred while checking for leftover files."))
+                      # Still show main success message even if leftover check failed
+                      self.show_loading(False, translator.get_text("Uninstallation of {app_name} completed").format(app_name=app_name))
+                      QMessageBox.information(self, translator.get_text("Uninstall Successful"), 
+                                               translator.get_text("'{app_name}' has been successfully uninstalled (leftover check failed).").format(app_name=app_name))
+            elif not db_removal_done: # If DB removal failed or wasn't reached
+                 self.show_loading(False, translator.get_text("Uninstallation partially failed"))
+                 # Previous error messages should guide the user
+
         except Exception as e:
             logger.error(f"An unexpected error occurred during uninstall: {e}", exc_info=True)
             self.show_loading(False, translator.get_text("Uninstallation error"))
@@ -504,9 +520,12 @@ class ManagePage(QWidget):
         finally:
             # Refresh the list regardless of outcome to show current state
             self.refresh_app_list()
-            
+
     def _cleanup_icon_files(self, app_name):
-        """Clean up icon files from the standard icon directories"""
+        # This method might become redundant if AppImageUninstaller handles icon cleanup correctly
+        # Keep it for now as a fallback or if direct icon path was stored?
+        # ... (keep existing code for now) ...
+        # Standard sizes to check for icons
         if not app_name:
             return
             
@@ -625,6 +644,71 @@ class ManagePage(QWidget):
         # Update status label
         if not self.progress_bar.isVisible():
             self.status_label.setText(translator.get_text("Ready"))
+
+# --- Leftover Files Dialog ---
+
+class LeftoverDialog(QDialog):
+    """Dialog to show potential leftover files and allow user to select for deletion."""
+    def __init__(self, leftover_paths, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(translator.get_text("Potential Leftover Files Found"))
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout(self)
+
+        info_label = QLabel(translator.get_text(
+            "The following files/directories might be leftovers from the uninstalled application. "
+            "Please review carefully and select the ones you want to remove:"
+        ))
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection) # Prevent blue selection highlight
+
+        for path in leftover_paths:
+            item = QListWidgetItem(path)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked) # Default to unchecked
+            self.list_widget.addItem(item)
+
+        layout.addWidget(self.list_widget)
+
+        # Select All / Deselect All Buttons
+        button_layout = QHBoxLayout()
+        select_all_button = QPushButton(translator.get_text("Select All"))
+        deselect_all_button = QPushButton(translator.get_text("Deselect All"))
+        button_layout.addWidget(select_all_button)
+        button_layout.addWidget(deselect_all_button)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        # Standard OK/Cancel buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(button_box)
+
+        # Connect signals
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        select_all_button.clicked.connect(self.select_all)
+        deselect_all_button.clicked.connect(self.deselect_all)
+
+    def select_all(self):
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Checked)
+
+    def deselect_all(self):
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Unchecked)
+
+    def get_selected_paths(self):
+        """Returns a list of paths corresponding to checked items."""
+        selected_paths = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                selected_paths.append(item.text())
+        return selected_paths
 
 # --- Logger Setup (Example - Adapt as needed) ---
 import logging

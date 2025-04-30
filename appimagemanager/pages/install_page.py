@@ -18,6 +18,7 @@ from ..i18n import get_translator # Import the getter function
 from ..appimage_utils import AppImageInstaller # ADD THIS IMPORT
 from ..db_manager import DBManager # ADD THIS IMPORT
 from .. import sudo_helper # ADD THIS IMPORT
+from .. import appimage_utils # Make sure this is imported
 
 # Get the translator instance
 translator = get_translator()
@@ -94,14 +95,24 @@ class InstallPage(QWidget):
         self.user_mode_radio = QRadioButton(translator.get_text("install_mode_user"))
         self.system_mode_radio = QRadioButton(translator.get_text("install_mode_system"))
         self.custom_mode_radio = QRadioButton(translator.get_text("install_mode_custom"))
+        self.register_only_radio = QRadioButton(translator.get_text("manage_mode_register"))
         
-        self.user_mode_radio.setChecked(config.DEFAULT_INSTALL_MODE == "user")
-        self.system_mode_radio.setChecked(config.DEFAULT_INSTALL_MODE == "system")
-        self.custom_mode_radio.setChecked(config.DEFAULT_INSTALL_MODE == "custom")
+        # Determine default check state based on config (or default to user)
+        default_mode = config.get_setting("default_install_mode", "user")
+        self.user_mode_radio.setChecked(default_mode == "user")
+        self.system_mode_radio.setChecked(default_mode == "system")
+        self.custom_mode_radio.setChecked(default_mode == "custom")
+        # Register mode cannot be the default install mode from config usually
+        # If somehow it was set, default to user instead.
+        if default_mode == config.MGMT_TYPE_REGISTERED:
+            self.user_mode_radio.setChecked(True)
+        else:
+            self.register_only_radio.setChecked(False) # Explicitly uncheck
 
         mode_layout.addWidget(self.user_mode_radio)
         mode_layout.addWidget(self.system_mode_radio)
         mode_layout.addWidget(self.custom_mode_radio)
+        mode_layout.addWidget(self.register_only_radio)
         options_layout.addLayout(mode_layout)
         
         # Custom Path (Initially hidden)
@@ -126,6 +137,7 @@ class InstallPage(QWidget):
         self.user_mode_radio.toggled.connect(self.toggle_custom_path)
         self.system_mode_radio.toggled.connect(self.toggle_custom_path)
         self.custom_mode_radio.toggled.connect(self.toggle_custom_path)
+        self.register_only_radio.toggled.connect(self.toggle_custom_path)
         self.custom_path_button.clicked.connect(self.select_custom_path)
 
         self.options_group.setLayout(options_layout)
@@ -223,16 +235,62 @@ class InstallPage(QWidget):
             logger.info(f"Custom installation path selected: {dir_path}")
 
     def start_installation(self):
-        """Starts the actual installation process based on selected options."""
+        """Starts the actual installation or registration process based on selected options."""
         appimage_path = self.selected_file_label.text()
         if not appimage_path or not os.path.exists(appimage_path):
             self.update_status(translator.get_text("Error: Please select a valid AppImage file first."), error=True)
             return
 
-        # Determine selected install mode
-        install_mode = "user" # Default
+        # --- Determine selected mode --- 
+        management_type = config.MGMT_TYPE_INSTALLED # Default to installed unless register is checked
+        install_mode = "user" # Default install mode if installed type
         custom_path = None
-        if self.system_mode_radio.isChecked():
+        
+        if self.register_only_radio.isChecked():
+            management_type = config.MGMT_TYPE_REGISTERED
+            logger.info(f"Starting registration for '{appimage_path}'")
+            self.set_ui_installing(True)
+            self.update_status(translator.get_text("Registering application..."))
+            self.progress_bar.setRange(0, 0) # Indeterminate for registration
+            self.progress_bar.setValue(-1) # Show busy indicator
+            
+            try:
+                # Call the register_appimage function
+                reg_info = appimage_utils.register_appimage(appimage_path)
+                if reg_info:
+                    logger.info(f"Registration info created: {reg_info.get('name')}")
+                    # Add to database
+                    try:
+                        db = DBManager()
+                        if db.add_app(reg_info):
+                            logger.info("Registered application added to database.")
+                            self.update_status(translator.get_text("Registration successful!"))
+                        else:
+                            logger.error("Failed to add registered application to database.")
+                            # Attempt to clean up artifacts if DB add failed
+                            appimage_utils.remove_registered_app_artifacts(reg_info)
+                            raise RuntimeError(translator.get_text("Failed to register in database."))
+                    except Exception as db_err:
+                        logger.error(f"Database error during registration: {db_err}")
+                        # Attempt to clean up artifacts if DB add failed
+                        appimage_utils.remove_registered_app_artifacts(reg_info)
+                        raise RuntimeError(f"{translator.get_text('Database error')}: {db_err}")
+                else:
+                    raise RuntimeError(translator.get_text("Failed to process AppImage for registration."))
+                
+            except Exception as e:
+                logger.error(f"Registration failed: {e}", exc_info=True)
+                self.update_status(f"{translator.get_text('Registration failed')}: {e}", error=True)
+                self.progress_bar.setRange(0, 1) # Stop indeterminate
+                self.progress_bar.setValue(0)
+            finally:
+                # Re-enable UI after a delay
+                QTimer.singleShot(1500, lambda: self.set_ui_installing(False))
+            
+            return # Stop here for registration mode
+
+        # --- Installation Mode Logic (User, System, Custom) --- 
+        elif self.system_mode_radio.isChecked():
             install_mode = "system"
         elif self.custom_mode_radio.isChecked():
             install_mode = "custom"
@@ -240,13 +298,15 @@ class InstallPage(QWidget):
             if not custom_path or not os.path.isdir(custom_path):
                 self.update_status(translator.get_text("Error: Please select a valid custom installation directory."), error=True)
                 return
+        # else: install_mode remains "user"
         
         logger.info(f"Starting installation for '{appimage_path}' (Mode: {install_mode}, Custom Path: {custom_path})")
         self.set_ui_installing(True)
         self.update_status(translator.get_text("Initializing installation..."))
         self.progress_bar.setRange(0, 100) # Use range 0-100 for steps
         self.progress_bar.setValue(5)
-
+        
+        installer = None # Define installer outside try block for finally clause
         try:
             # 1. Create Installer Instance
             installer = AppImageInstaller(appimage_path, install_mode, custom_path)
@@ -313,6 +373,8 @@ class InstallPage(QWidget):
                 self.update_status(translator.get_text("Registering application..."))
                 # QApplication.processEvents()
                 app_info = installer.get_installation_info()
+                # IMPORTANT: Explicitly set management type for installed apps
+                app_info["management_type"] = config.MGMT_TYPE_INSTALLED 
                 try:
                     db = DBManager()
                     if db.add_app(app_info):
@@ -338,7 +400,7 @@ class InstallPage(QWidget):
             self.progress_bar.setValue(0) # Reset progress on error
         finally:
             # 6. Cleanup (always attempt)
-            if 'installer' in locals(): # Check if installer was created
+            if installer: # Check if installer object was created
                  logger.info("Performing cleanup...")
                  installer.cleanup()
             # Re-enable UI elements after a short delay to let user see final status
@@ -400,6 +462,7 @@ class InstallPage(QWidget):
         self.user_mode_radio.setText(translator.get_text("install_mode_user"))
         self.system_mode_radio.setText(translator.get_text("install_mode_system"))
         self.custom_mode_radio.setText(translator.get_text("install_mode_custom"))
+        self.register_only_radio.setText(translator.get_text("manage_mode_register"))
 
         # Update group box titles
         self.info_group.setTitle(translator.get_text("lbl_app_info"))
@@ -408,6 +471,9 @@ class InstallPage(QWidget):
         # Update buttons
         self.custom_path_button.setText(translator.get_text("btn_browse"))
         self.install_button.setText(translator.get_text("btn_install"))
+        # Retranslate recent button if it exists
+        if hasattr(self, 'recent_button'):
+            self.recent_button.setText(translator.get_text("Recent AppImages"))
 
         # Update labels
         self.custom_path_input.setPlaceholderText(translator.get_text("Select custom installation directory"))

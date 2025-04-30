@@ -186,6 +186,7 @@
     "Install for all users (requires administrator privileges)": "Tüm kullanıcılar için yükleyin (yönetici ayrıcalıkları gerektirir)",
     "Install only for your user account (recommended)": "Yalnızca kullanıcı hesabınız için yükleyin (önerilir)",
     "Specify a custom installation location": "Özel bir yükleme konumu belirtin",
+    "manage_mode_register": "Menüye Ekle (Orijinali Koru)",
     "Specify the directory where you want to install the AppImage": "AppImage'i yüklemek istediğiniz dizini belirtin",
     "Browse for a custom installation directory": "Özel bir yükleme dizini için göz atın",
     "Start the installation process for the selected AppImage": "Seçilen AppImage için yükleme işlemini başlatın",
@@ -197,5 +198,7 @@
     "Search by name, version...": "Ada, sürüme göre ara...",
     "Application Name": "Uygulama Adı",
     "Installation Path": "Kurulum Yolu",
-    "Status": "Durum"
+    "Status": "Durum",
+    "Recent AppImages": "Son Kullanılan AppImage'lar",
+    "Recent AppImages Description": "Son yüklenen AppImage dosyalarının listesi"
 } 

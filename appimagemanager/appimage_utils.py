@@ -12,6 +12,7 @@ import json
 import configparser
 import traceback
 import re # Import re for sanitizing names
+import uuid # Ensure uuid is imported if not already
 from pathlib import Path
 
 from . import config
@@ -150,16 +151,9 @@ class AppImageInstaller:
             checks["is_root"] = os.geteuid() == 0
         else:
             # Check if we have write access to target dirs even if not root
-            checks["has_write_access"] = self._check_write_permissions()
+            checks["has_write_access"] = True # Assume true if root not required
         
         return checks
-    
-    def _check_write_permissions(self):
-        """Check write permissions for non-root install/link locations."""
-        # This is essentially the same logic as _check_if_root_required 
-        # but intended for non-root scenarios to give specific feedback
-        # Reuse the logic for clarity
-        return not self._check_if_root_required()
     
     def _check_libfuse_installed(self):
         """libfuse paketinin kurulu olup olmadığını kontrol eder."""
@@ -209,7 +203,7 @@ class AppImageInstaller:
             
             self.extract_dir = os.path.join(self.temp_dir, "squashfs-root")
             if not os.path.isdir(self.extract_dir):
-                logger.error(f"\'squashfs-root\' dizini bulunamadı: {self.temp_dir}")
+                logger.error(f'\'squashfs-root\' dizini bulunamadı: {self.temp_dir}')
                 subdirs = [d for d in os.listdir(self.temp_dir) if os.path.isdir(os.path.join(self.temp_dir, d))]
                 if len(subdirs) == 1:
                     logger.info(f"Alternatif çıkarılan dizin kullanılıyor: {subdirs[0]}")
@@ -355,7 +349,7 @@ class AppImageInstaller:
         source_dir = os.path.join(self.extract_dir, "usr")
         if not os.path.isdir(source_dir):
             source_dir = self.extract_dir 
-            logger.info(f"\'usr\' dizini yok, \'{source_dir}\' kök dizini kopyalanacak.")
+            logger.info(f'\'usr\' dizini yok, \'{source_dir}\' kök dizini kopyalanacak.')
             
         target_dir = self.app_install_dir
         logger.info(f"Dosyalar \'{source_dir}\' dizininden \'{target_dir}\' altına kopyalanıyor (shutil.copytree)..." + (" (root gerekebilir)" if self.requires_root else ""))
@@ -789,9 +783,9 @@ class AppImageInstaller:
                 subprocess.run(["update-desktop-database", self.desktop_link_dir], check=False, capture_output=True)
                 logger.info(f"Masaüstü veritabanı güncellendi: {self.desktop_link_dir}")
             except Exception as e:
-                 logger.warning(f"\'update-desktop-database\' çalıştırılırken hata: {e}")
+                 logger.warning(f"'update-desktop-database' çalıştırılırken hata: {e}")
         else:
-             logger.warning("\'update-desktop-database\' komutu bulunamadı, veritabanı güncellenmedi.")
+             logger.warning("'update-desktop-database' komutu bulunamadı, veritabanı güncellenmedi.")
 
     def get_install_commands(self):
         """Root yetkisiyle çalıştırılması GEREKEN kurulum komutlarını döndürür.\n           (Dosya kopyalama için rsync ve symlink oluşturma)."""
@@ -953,60 +947,182 @@ class AppImageUninstaller:
             app_info (dict): Kaldırılacak uygulamanın bilgilerini içeren sözlük
         """
         self.app_info = app_info
+        # Determine paths from app_info
+        self.app_install_dir = self.app_info.get("app_install_dir")
+        self.symlinks = self.app_info.get("symlinks_created", [])
+        self.install_mode = self.app_info.get("install_mode", "user") # Default to user if missing
+        
         self.requires_root = self._check_if_root_required()
     
     def _check_if_root_required(self):
         """Kaldırma işlemi için root yetkisi gerekip gerekmediğini kontrol eder."""
-        install_mode = self.app_info.get("install_mode", "system")
-        install_path = self.app_info.get("install_path", "")
-        
-        if install_mode == "system":
+        # If install mode was system, root is required
+        if self.install_mode == "system":
             return True
-        elif install_mode == "user":
-            return False
-        elif install_mode == "custom" and install_path:
-            # Yolun yazılabilir olup olmadığını kontrol et
-            try:
-                parent_dir = os.path.dirname(install_path)
-                test_path = os.path.join(parent_dir, ".write_test")
-                with open(test_path, 'w') as f:
-                    f.write("test")
-                os.remove(test_path)
-                return False
-            except (PermissionError, OSError):
-                return True
-        
-        return True  # Varsayılan olarak güvenli tarafta kalmak için
-    
+            
+        # Check write access for app_install_dir parent
+        if self.app_install_dir and not self._can_write_to_parent(self.app_install_dir):
+             logger.debug(f"Root required to remove install directory: {self.app_install_dir}")
+             return True
+             
+        # Check write access for symlink parent directories
+        for link in self.symlinks:
+            if not self._can_write_to_parent(link):
+                 logger.debug(f"Root required to remove symlink: {link}")
+                 return True
+                 
+        return False # Assume user mode or custom path with write access
+
+    def _can_write_to_parent(self, path):
+        """Check if the parent directory of a path is writable."""
+        if not path: return False
+        parent = os.path.dirname(path)
+        if not parent: parent = '/' # Handle root case
+        return os.path.exists(parent) and os.access(parent, os.W_OK)
+
     def uninstall(self):
-        """Uygulamayı kaldırır."""
+        """Uygulamayı kaldırır (root olmayan). Eğer root gerekiyorsa False döndürür.
+           Root gerektiren kaldırma işlemleri için get_uninstall_commands kullanılmalıdır.
+        """
+        if self.requires_root:
+            logger.error("Uninstall called directly but root privileges are required. Use get_uninstall_commands.")
+            return False # Indicate failure or need for sudo commands
+            
+        logger.info(f"Uninstalling '{self.app_info.get('name', 'Unknown App')}' (non-root)...")
+        success = True
+        removed_items = []
+
         try:
-            # Kurulu dosyaları tek tek sil
-            files_to_remove = self.app_info.get("extracted_files", [])
-            
-            # Önce desktop dosyasını sil
-            desktop_file = self.app_info.get("desktop_file", "")
-            if desktop_file and os.path.exists(desktop_file):
-                logger.info(f"Desktop dosyası siliniyor: {desktop_file}")
-                os.remove(desktop_file)
-            
-            # Diğer dosyaları sil
-            removed_files = []
-            for file_path in files_to_remove:
-                if os.path.exists(file_path):
+            # 1. Remove symlinks
+            for link_path in self.symlinks:
+                if os.path.lexists(link_path): # Use lexists for symlinks
                     try:
-                        os.remove(file_path)
-                        removed_files.append(file_path)
-                    except (IsADirectoryError, PermissionError, OSError) as e:
-                        # Dizin veya silinemez dosya
-                        logger.warning(f"Dosya silinemedi: {file_path}, {e}")
-            
-            logger.info(f"Kaldırma tamamlandı: {len(removed_files)}/{len(files_to_remove)} dosya silindi.")
-            return True
+                        os.remove(link_path)
+                        logger.info(f"Symlink silindi: {link_path}")
+                        removed_items.append(link_path)
+                    except (PermissionError, OSError) as e:
+                        logger.warning(f"Symlink silinemedi: {link_path}, {e}")
+                        success = False # Mark as partially failed but continue
+                else:
+                    logger.debug(f"Symlink bulunamadı (zaten silinmiş olabilir): {link_path}")
+
+            # 2. Remove installation directory
+            if self.app_install_dir and os.path.exists(self.app_install_dir):
+                try:
+                    shutil.rmtree(self.app_install_dir)
+                    logger.info(f"Kurulum dizini silindi: {self.app_install_dir}")
+                    removed_items.append(self.app_install_dir)
+                except (PermissionError, OSError) as e:
+                    logger.error(f"Kurulum dizini silinemedi: {self.app_install_dir}, {e}")
+                    success = False
+            elif self.app_install_dir:
+                 logger.debug(f"Kurulum dizini bulunamadı (zaten silinmiş olabilir): {self.app_install_dir}")
+
+            # 3. Update desktop database and icon cache (best effort)
+            if any(link.endswith(".desktop") for link in removed_items):
+                self._update_desktop_database()
+            if any(".local/share/icons" in item for item in removed_items):
+                self._update_icon_cache()
+
+            logger.info(f"Kaldırma tamamlandı: {len(removed_items)} öğe silindi.")
+            return success
         except Exception as e:
-            logger.error(f"Kaldırma sırasında hata: {e}")
+            logger.error(f"Kaldırma sırasında beklenmedik hata: {e}")
+            logger.error(traceback.format_exc())
             return False
 
+    def get_uninstall_commands(self):
+        """Root yetkisiyle çalıştırılması GEREKEN kaldırma komutlarını döndürür."""
+        if not self.requires_root:
+            logger.warning("get_uninstall_commands called but root is not required.")
+            return []
+            
+        logger.info(f"Generating uninstall commands for '{self.app_info.get('name', 'Unknown App')}' (root required)...")
+        commands = []
+
+        # 1. Remove symlinks command (use rm -f)
+        for link_path in self.symlinks:
+            commands.append(f"rm -f \"{link_path}\"")
+            
+        # 2. Remove installation directory command (use rm -rf)
+        if self.app_install_dir:
+            commands.append(f"rm -rf \"{self.app_install_dir}\"")
+            
+        # 3. Update desktop database and icon cache commands (if applicable)
+        desktop_link_dir = None
+        icon_cache_dir = None
+        for link_path in self.symlinks:
+            if link_path.endswith(".desktop"):
+                 desktop_link_dir = os.path.dirname(link_path)
+            if "/icons/" in link_path:
+                 # Find the base icon directory (e.g., /usr/local/share/icons/hicolor)
+                 # This is a heuristic, might need refinement
+                 parts = link_path.split('/icons/')
+                 if len(parts) > 1:
+                     icon_base = os.path.dirname(parts[0] + '/icons/')
+                     # Look for hicolor specifically
+                     if os.path.basename(icon_base) == "icons":
+                         icon_cache_dir = os.path.join(icon_base, "hicolor")
+                     else:
+                         icon_cache_dir = icon_base # Fallback
+                 break # Assume one icon cache dir is enough
+                
+        if desktop_link_dir and shutil.which("update-desktop-database"): 
+            commands.append(f"update-desktop-database \"{desktop_link_dir}\"")
+        
+        if icon_cache_dir and shutil.which("gtk-update-icon-cache"):
+            commands.append(f"gtk-update-icon-cache -f -t \"{icon_cache_dir}\"")
+
+        logger.info(f"Oluşturulan root kaldırma komutları: {len(commands)} adet")
+        return commands
+
+    def _update_desktop_database(self):
+        """Masaüstü veritabanını günceller (root olmayan)."""
+        desktop_link_dir = None
+        for link in self.symlinks:
+            if link.endswith(".desktop"):
+                 # Assume user mode path
+                 desktop_link_dir = os.path.dirname(link)
+                 break
+        
+        if desktop_link_dir and shutil.which("update-desktop-database"): 
+            try:
+                subprocess.run(["update-desktop-database", desktop_link_dir], check=False, capture_output=True)
+                logger.info(f"Masaüstü veritabanı güncellendi: {desktop_link_dir}")
+            except Exception as e:
+                 logger.warning(f"'update-desktop-database' çalıştırılırken hata: {e}")
+        else:
+             logger.debug("'update-desktop-database' komutu bulunamadı veya desktop link yok.")
+            
+    def _update_icon_cache(self):
+        """İkon önbelleğini günceller (root olmayan)."""
+        icon_cache_dir = None
+        for link in self.symlinks:
+            if ".local/share/icons" in link:
+                # Heuristic to find the hicolor dir
+                if "/hicolor/" in link:
+                    icon_cache_dir = link.split('/hicolor/')[0] + '/hicolor'
+                else: # Fallback: Use the parent dir containing .local/share/icons
+                    icon_cache_dir = os.path.dirname(link.split('.local/share/icons')[0] + '.local/share/icons')
+                break # Assume one dir is enough
+        
+        if icon_cache_dir and shutil.which("gtk-update-icon-cache"):
+            try:
+                # Update the specific hicolor directory or the base .local/share/icons
+                target_dir = icon_cache_dir
+                if not target_dir.endswith("hicolor"): # If we didn't find hicolor specifically
+                     hicolor_check = os.path.join(target_dir, "hicolor")
+                     if os.path.isdir(hicolor_check):
+                         target_dir = hicolor_check
+                        
+                logger.info(f"Updating icon cache for directory: {target_dir}")
+                subprocess.run(["gtk-update-icon-cache", "-f", "-t", target_dir], 
+                              check=False, capture_output=True)
+                logger.info("Icon cache updated")
+            except Exception as e:
+                logger.warning(f"Failed to update icon cache: {e}")
+        else:
+            logger.debug("Icon cache update skipped (command not found or no icons removed).")
 
 def check_system_compatibility():
     """Sistem uyumluluğunu kontrol eder."""
@@ -1014,7 +1130,8 @@ def check_system_compatibility():
         "is_ubuntu": False,
         "ubuntu_version": None,
         "libfuse_installed": False,
-        "rsync_installed": False
+        "rsync_installed": False,
+        "pkexec_installed": False # Check for pkexec for sudo helper
     }
     
     # Ubuntu'yu kontrol et
@@ -1048,4 +1165,511 @@ def check_system_compatibility():
     except Exception:
         pass
     
+    # pkexec kontrol et (sudo_helper için önemli olabilir)
+    try:
+         checks["pkexec_installed"] = shutil.which("pkexec") is not None
+    except Exception:
+         pass
+        
     return checks 
+
+# --- Leftover File Management ---
+
+def find_leftovers(app_name):
+    """Find potential leftover files and directories for a given app name."""
+    if not app_name:
+        return []
+        
+    logger.info(f"Searching for potential leftovers for: {app_name}")
+    potential_leftovers = []
+    search_dirs = [
+        os.path.join(config.USER_HOME, ".config"),
+        os.path.join(config.USER_HOME, ".cache"),
+        os.path.join(config.USER_HOME, ".local", "share")
+    ]
+    
+    # Normalize app name for searching (lowercase, maybe sanitized?)
+    # Using lowercase for case-insensitive comparison
+    normalized_app_name = app_name.lower()
+    # Also consider the sanitized version if different
+    sanitized_app_name = sanitize_name(app_name).lower()
+    search_terms = {normalized_app_name}
+    if sanitized_app_name != normalized_app_name:
+        search_terms.add(sanitized_app_name)
+        
+    logger.debug(f"Searching for terms: {search_terms} in dirs: {search_dirs}")
+
+    for base_dir in search_dirs:
+        if not os.path.isdir(base_dir):
+            continue
+            
+        try:
+            # Use os.scandir for potentially better performance than os.listdir+os.path
+            for entry in os.scandir(base_dir):
+                entry_name_lower = entry.name.lower()
+                # Check if any search term is present in the entry name
+                if any(term in entry_name_lower for term in search_terms):
+                    # Heuristic: Avoid matching very common short names or system files
+                    # Example: avoid matching 'qt' if app name is 'qtcreator' in ~/.config/qt* files
+                    # This needs careful tuning to avoid false positives/negatives.
+                    # For now, let's include if the app name is a distinct part.
+                    # Simple check: if the found name is exactly one of the search terms
+                    is_exact_match = entry_name_lower in search_terms
+                    # Or if it starts with one of the search terms + common separators like -, _
+                    starts_with_match = any(entry_name_lower.startswith(term + sep) for term in search_terms for sep in ["", "-", "_"])
+                    
+                    # Add path if it seems relevant (exact match or starts with app name)
+                    if is_exact_match or starts_with_match:
+                        if entry.path not in potential_leftovers: # Avoid duplicates
+                           logger.debug(f"Found potential leftover: {entry.path}")
+                           potential_leftovers.append(entry.path)
+                       
+                    # Potential Improvement: Walk deeper? Only if necessary, increases complexity/risk.
+                    # if entry.is_dir():
+                    #    # Recursively search inside? Might be too broad.
+                    #    pass 
+        except OSError as e:
+            logger.warning(f"Could not scan directory {base_dir}: {e}")
+            
+    logger.info(f"Found {len(potential_leftovers)} potential leftover item(s).")
+    return potential_leftovers
+
+def remove_selected_leftovers(paths):
+    """Remove the selected leftover files and directories."""
+    if not paths:
+        return True, 0
+        
+    logger.info(f"Removing selected leftover items: {len(paths)}")
+    removed_count = 0
+    errors = []
+
+    for path in paths:
+        try:
+            if os.path.isfile(path) or os.path.islink(path):
+                os.remove(path)
+                logger.info(f"Removed leftover file/link: {path}")
+                removed_count += 1
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+                logger.info(f"Removed leftover directory: {path}")
+                removed_count += 1
+            else:
+                logger.warning(f"Skipping leftover item (not file/dir/link or already removed): {path}")
+        except (PermissionError, OSError) as e:
+            logger.error(f"Failed to remove leftover item: {path}, Error: {e}")
+            errors.append(f"{path}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error removing leftover item: {path}, Error: {e}")
+            logger.error(traceback.format_exc())
+            errors.append(f"{path}: Unexpected error")
+            
+    if errors:
+        logger.error(f"Errors occurred during leftover removal: {len(errors)} item(s)")
+        # It might be useful to return the error details to the UI
+        return False, removed_count # Indicate partial or full failure
+    else:
+        logger.info(f"Successfully removed {removed_count} leftover item(s).")
+        return True, removed_count # Indicate success 
+
+# --- Helper function for finding desktop file ---
+def _find_desktop_file(extract_dir):
+    """Finds the main .desktop file within an extracted directory."""
+    desktop_file_path = None
+    # Prioritize finding .desktop file in standard locations
+    potential_paths = [
+        os.path.join(extract_dir, "usr", "share", "applications"),
+        extract_dir
+    ]
+    for base_path in potential_paths:
+        if os.path.isdir(base_path):
+            for item in os.listdir(base_path):
+                if item.lower().endswith(".desktop"):
+                    # Heuristic: Avoid entries like mimeinfo.cache
+                    if 'mimeinfo' not in item.lower():
+                        desktop_file_path = os.path.join(base_path, item)
+                        break
+        if desktop_file_path:
+            break
+
+    # Fallback: search entire extracted directory if not found above
+    if not desktop_file_path:
+        for root, _, files in os.walk(extract_dir):
+            for file in files:
+                if file.lower().endswith(".desktop") and 'mimeinfo' not in file.lower():
+                    desktop_file_path = os.path.join(root, file)
+                    break
+            if desktop_file_path:
+                break
+                
+    if desktop_file_path:
+        logger.debug(f"Found desktop file in extracted dir: {desktop_file_path}")
+    else:
+        logger.warning(f"Could not find .desktop file in extracted dir: {extract_dir}")
+    return desktop_file_path
+
+# --- Helper function for parsing desktop file metadata ---
+def _parse_metadata_from_desktop(desktop_file_path):
+    """Parses essential metadata from a .desktop file."""
+    metadata = {
+        "name": None, "version": "unknown", "description": "", 
+        "icon_name": "", "categories": [], "exec_val": ""
+    }
+    if not desktop_file_path or not os.path.exists(desktop_file_path):
+        return metadata
+
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str 
+    try:
+        with open(desktop_file_path, 'r', encoding='utf-8') as f:
+            parser.read_file(f)
+            
+        if "Desktop Entry" in parser:
+            entry = parser["Desktop Entry"]
+            metadata["name"] = entry.get("Name")
+            metadata["description"] = entry.get("Comment", entry.get("GenericName", ""))
+            metadata["icon_name"] = entry.get("Icon", "")
+            metadata["categories"] = [cat.strip() for cat in entry.get("Categories", "").split(';') if cat.strip()]
+            metadata["exec_val"] = entry.get("Exec", "")
+            metadata["version"] = entry.get("X-AppImage-Version", entry.get("Version", "unknown"))
+            logger.debug(f"Parsed metadata: Name={metadata['name']}, Icon={metadata['icon_name']}")
+        else:
+             logger.warning(f"Desktop file missing [Desktop Entry]: {desktop_file_path}")
+    except Exception as e:
+        logger.error(f"Error parsing desktop file {desktop_file_path}: {e}")
+        
+    # Fallback name if parsing failed or Name key missing
+    if not metadata["name"]:
+         metadata["name"] = os.path.basename(desktop_file_path).replace(".desktop", "")
+         logger.warning(f"Using fallback name from filename: {metadata['name']}")
+
+    return metadata
+
+# --- Helper function for finding icon file ---
+def _find_icon_in_extracted(extract_dir, icon_name):
+    """Finds the best icon file path within the extracted directory."""
+    if not icon_name:
+        return None
+
+    search_bases = [
+        os.path.join(extract_dir, "usr", "share", "icons"), 
+        extract_dir 
+    ]
+    best_icon_path = None
+    max_size = 0
+
+    for base in search_bases:
+        if not os.path.isdir(base): continue
+        
+        hicolor_path = os.path.join(base, "hicolor")
+        # Check common png/svg extensions directly in base or base/pixmaps
+        pixmap_path = os.path.join(base, "pixmaps")
+        icon_search_paths = [base]
+        if os.path.isdir(pixmap_path):
+            icon_search_paths.append(pixmap_path)
+            
+        for search_path in icon_search_paths:
+            for ext in [".svg", ".svgz", ".png", ".xpm"]:
+                potential_icon = os.path.join(search_path, f"{icon_name}{ext}")
+                if os.path.exists(potential_icon):
+                    if ext.startswith(".svg"): # Prefer SVG
+                        best_icon_path = potential_icon
+                        break # Stop searching paths/extensions if SVG found
+                    elif not best_icon_path or ext == ".png": # Found PNG
+                         best_icon_path = potential_icon
+                         # Don't break PNG, look for bigger ones
+                    elif not best_icon_path and ext == ".xpm": # Fallback to XPM
+                         best_icon_path = potential_icon
+
+            if best_icon_path and best_icon_path.endswith((".svg", ".svgz")): break
+        if best_icon_path and best_icon_path.endswith((".svg", ".svgz")): break
+
+        # Search hicolor for PNGs (prefer larger) if no SVG found yet
+        if os.path.isdir(hicolor_path) and (not best_icon_path or best_icon_path.endswith(".png")):
+             try: # scandir might fail due to permissions
+                size_dirs = [d.name for d in os.scandir(hicolor_path) if d.is_dir() and 'x' in d.name]
+                for size_dir in sorted(size_dirs, key=lambda s: int(s.split('x')[0]) if s.split('x')[0].isdigit() else 0, reverse=True):
+                    try:
+                         current_size = int(size_dir.split('x')[0])
+                         if current_size < max_size: continue
+                         apps_path = os.path.join(hicolor_path, size_dir, "apps")
+                         potential_icon_hicolor = os.path.join(apps_path, f"{icon_name}.png")
+                         if os.path.exists(potential_icon_hicolor):
+                             if current_size > max_size:
+                                 max_size = current_size
+                                 best_icon_path = potential_icon_hicolor
+                    except (ValueError, IndexError, FileNotFoundError):
+                         continue
+             except OSError as e:
+                  logger.warning(f"Could not scan hicolor directory {hicolor_path}: {e}")
+
+    if best_icon_path:
+        logger.debug(f"Found best icon in extracted dir: {best_icon_path}")
+    else:
+        logger.warning(f"Could not find icon '{icon_name}' in extracted dir: {extract_dir}")
+    return best_icon_path
+
+# --- Helper function to copy icon to user location ---
+def _copy_icon_to_user_location(source_icon_path, app_name):
+    """Copies the icon to the user's standard hicolor directory, returns target path or None."""
+    if not source_icon_path or not os.path.exists(source_icon_path) or not app_name:
+        return None
+        
+    icon_filename = os.path.basename(source_icon_path)
+    # Use sanitized app name for the target filename to avoid issues
+    sanitized_app_name = sanitize_name(app_name)
+    icon_ext = os.path.splitext(icon_filename)[1].lower()
+    target_filename = f"{sanitized_app_name}{icon_ext}"
+
+    target_icon_dir_base = os.path.join(config.USER_HOME, ".local/share/icons/hicolor")
+    target_icon_subdir = ""
+    
+    if icon_ext in ['.svg', '.svgz']:
+        target_icon_subdir = os.path.join(target_icon_dir_base, "scalable", "apps")
+    elif icon_ext == ".png":
+        # Try to guess size from path, otherwise use fallback
+        size = "128x128" # Default fallback size
+        parts = source_icon_path.split(os.sep)
+        for i, part in enumerate(reversed(parts)):
+            if 'x' in part and part.split('x')[0].isdigit() and i < 3: # Heuristic: size is usually close to filename
+                size = part
+                break
+        target_icon_subdir = os.path.join(target_icon_dir_base, size, "apps")
+    else:
+        # Fallback for other types like xpm, put in a generic size dir
+        target_icon_subdir = os.path.join(target_icon_dir_base, "48x48", "apps") # Arbitrary choice
+
+    try:
+        os.makedirs(target_icon_subdir, exist_ok=True)
+        target_icon_path = os.path.join(target_icon_subdir, target_filename)
+        shutil.copy2(source_icon_path, target_icon_path)
+        logger.info(f"Icon copied to user location: {target_icon_path}")
+        # Return the *sanitized name* which should be used in the .desktop file
+        # or the full path depending on desktop spec recommendations? Usually name is preferred.
+        return sanitized_app_name # Return name for .desktop file
+    except Exception as e:
+        logger.error(f"Failed to copy icon {source_icon_path} to {target_icon_subdir}: {e}")
+        return None
+
+# --- Helper function to create .desktop file ---
+def _create_registered_desktop_file(appimage_path, metadata, registered_icon_name_or_path):
+    """Creates a .desktop file for a registered AppImage."""
+    if not metadata.get("name") or not appimage_path:
+        logger.error("Cannot create .desktop file: Missing name or AppImage path.")
+        return None
+
+    desktop_dir = os.path.join(config.USER_HOME, ".local", "share", "applications")
+    os.makedirs(desktop_dir, exist_ok=True)
+
+    # Use sanitized name for the desktop file name
+    desktop_filename = f"appimagekit_{sanitize_name(metadata['name'])}.desktop"
+    desktop_file_path = os.path.join(desktop_dir, desktop_filename)
+
+    logger.info(f"Creating .desktop file: {desktop_file_path}")
+    try:
+        with open(desktop_file_path, 'w', encoding='utf-8') as f:
+            f.write("[Desktop Entry]\n")
+            f.write(f"Name={metadata['name']}\n")
+            if metadata.get("description"):
+                f.write(f"Comment={metadata['description']}\n")
+            # IMPORTANT: Exec points directly to the original AppImage path
+            # Quote the path to handle spaces etc.
+            f.write(f"Exec=\"{appimage_path}\" %U\n") # Add %U for file manager integration
+            # Use the registered icon name/path
+            if registered_icon_name_or_path:
+                f.write(f"Icon={registered_icon_name_or_path}\n")
+            else:
+                 # Fallback to generic icon if copy failed
+                 f.write(f"Icon=application-x-appimage\n")
+            f.write("Terminal=false\n")
+            f.write("Type=Application\n")
+            if metadata.get("categories"):
+                f.write(f"Categories={';'.join(metadata['categories'])};\n")
+            else:
+                 f.write(f"Categories=Utility;\n") # Default category
+            # Add AppImage specific keys?
+            f.write(f"X-AppImage-Path={appimage_path}\n")
+            f.write(f"X-AppImage-Managed-By=appimagemanager\n")
+            
+        # Update desktop database
+        if shutil.which("update-desktop-database"):
+            try:
+                subprocess.run(["update-desktop-database", desktop_dir], check=False, capture_output=True)
+                logger.info(f"Masaüstü veritabanı güncellendi: {desktop_dir}")
+            except Exception as e:
+                logger.warning(f"'update-desktop-database' çalıştırılırken hata: {e}")
+        
+        return desktop_file_path
+    except Exception as e:
+        logger.error(f"Failed to create .desktop file {desktop_file_path}: {e}")
+        return None
+
+# --- Main function for registering an AppImage ---
+def register_appimage(appimage_path):
+    """Registers an AppImage by extracting metadata, copying icon, creating desktop file."""
+    if not os.path.exists(appimage_path):
+        logger.error(f"Cannot register AppImage: File not found at {appimage_path}")
+        return None
+        
+    logger.info(f"Registering AppImage: {appimage_path}")
+    temp_dir = None
+    extract_dir = None
+    db_info = None
+
+    try:
+        # 1. Extract AppImage temporarily
+        temp_dir = tempfile.mkdtemp(prefix="appimage_register_")
+        logger.debug(f"Temporary directory created: {temp_dir}")
+        # Ensure executable permission
+        try:
+            os.chmod(appimage_path, os.stat(appimage_path).st_mode | 0o111)
+        except Exception as chmod_err:
+            logger.warning(f"Could not set executable permission on {appimage_path}: {chmod_err}")
+            
+        extract_cmd = [appimage_path, "--appimage-extract"]
+        result = subprocess.run(extract_cmd, cwd=temp_dir, capture_output=True, text=True, check=False)
+        
+        if result.returncode != 0:
+             logger.warning(f"AppImage extraction failed (RC={result.returncode}), trying again without HOME env var... stderr: {result.stderr}")
+             result = subprocess.run(extract_cmd, cwd=temp_dir, capture_output=True, text=True, env={})
+             if result.returncode != 0:
+                  logger.error(f"AppImage extraction failed definitively. stderr: {result.stderr}")
+                  raise RuntimeError("Failed to extract AppImage metadata.")
+
+        extract_dir = os.path.join(temp_dir, "squashfs-root")
+        if not os.path.isdir(extract_dir):
+            subdirs = [d for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+            if len(subdirs) == 1:
+                extract_dir = os.path.join(temp_dir, subdirs[0])
+            else:
+                 logger.error(f"Could not find extracted directory structure in {temp_dir}")
+                 raise RuntimeError("Unknown extracted AppImage structure.")
+        logger.info(f"AppImage extracted temporarily to: {extract_dir}")
+
+        # 2. Find and parse .desktop file
+        desktop_file = _find_desktop_file(extract_dir)
+        if not desktop_file:
+             # Use fallback metadata if no desktop file found
+             app_name = os.path.basename(appimage_path).replace(".AppImage", "")
+             metadata = {"name": app_name, "version": "unknown", "icon_name": "", "categories": [], "description": ""}
+             logger.warning("Using fallback metadata due to missing .desktop file.")
+        else:
+             metadata = _parse_metadata_from_desktop(desktop_file)
+
+        # Ensure we have a name
+        if not metadata.get("name"):
+             metadata["name"] = os.path.basename(appimage_path).replace(".AppImage", "")
+             logger.warning(f"Using fallback name from AppImage filename: {metadata['name']}")
+
+        # 3. Find and copy icon
+        source_icon_path = _find_icon_in_extracted(extract_dir, metadata.get("icon_name"))
+        registered_icon_name = None
+        if source_icon_path:
+            registered_icon_name = _copy_icon_to_user_location(source_icon_path, metadata['name']) # Use app name for target file
+
+        # 4. Create .desktop file pointing to original AppImage
+        created_desktop_path = _create_registered_desktop_file(appimage_path, metadata, registered_icon_name)
+
+        # 5. Prepare info for DBManager
+        db_info = {
+            "name": metadata['name'],
+            "version": metadata.get("version", "unknown"),
+            "description": metadata.get("description", ""),
+            "categories": metadata.get("categories", []),
+            "appimage_path": appimage_path, # Store original path
+            "desktop_file": created_desktop_path, # Path to the created .desktop file
+            "icon_path": registered_icon_name, # Use the *name* used for registration, not the source path
+            "management_type": config.MGMT_TYPE_REGISTERED,
+            # These fields are not applicable for registered type
+            "app_install_dir": None,
+            "symlinks_created": [], 
+            "executable_path": appimage_path # Executable is the original file itself
+        }
+        logger.info(f"Prepared registration info for DB: {metadata['name']}")
+
+    except Exception as e:
+        logger.error(f"Error during AppImage registration for {appimage_path}: {e}", exc_info=True)
+        db_info = None # Ensure we return None on error
+    finally:
+        # 6. Cleanup temporary directory
+        if temp_dir and os.path.isdir(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Temporary directory cleaned up: {temp_dir}")
+            except Exception as cleanup_err:
+                logger.error(f"Failed to clean up temporary directory {temp_dir}: {cleanup_err}")
+                
+    return db_info # Return the dict or None if failed
+
+# --- Function to remove registered app artifacts --- 
+def remove_registered_app_artifacts(app_info):
+    """Removes .desktop file and copied icons for a registered app."""
+    if not app_info or app_info.get("management_type") != config.MGMT_TYPE_REGISTERED:
+        logger.warning("Skipping artifact removal: Invalid app_info or not a registered app.")
+        return False
+        
+    app_name = app_info.get("name", "unknown")
+    logger.info(f"Removing registered artifacts for {app_name}...")
+    success = True
+    
+    # 1. Remove .desktop file
+    desktop_file = app_info.get("desktop_file")
+    if desktop_file and os.path.exists(desktop_file):
+        try:
+            os.remove(desktop_file)
+            logger.info(f"Removed .desktop file: {desktop_file}")
+            # Update desktop database after removing file
+            desktop_dir = os.path.dirname(desktop_file)
+            if shutil.which("update-desktop-database"):
+                try:
+                    subprocess.run(["update-desktop-database", desktop_dir], check=False, capture_output=True)
+                    logger.info(f"Masaüstü veritabanı güncellendi: {desktop_dir}")
+                except Exception as e:
+                    logger.warning(f"'update-desktop-database' çalıştırılırken hata: {e}")
+        except OSError as e:
+            logger.error(f"Failed to remove .desktop file {desktop_file}: {e}")
+            success = False
+    elif desktop_file:
+        logger.debug(f".desktop file not found (already removed?): {desktop_file}")
+
+    # 2. Remove copied icon(s)
+    # We stored the *name* used for the icon file (sanitized), not the full path.
+    # We need to search for this name in standard user icon locations.
+    icon_name_registered = app_info.get("icon_path") 
+    if icon_name_registered: 
+        icon_removed = False
+        logger.info(f"Attempting to remove icons matching base name: {icon_name_registered}")
+        # Standard sizes and locations to check
+        icon_sizes = ["16x16", "22x22", "24x24", "32x32", "48x48", "64x64", "128x128", "256x256", "512x512", "scalable"]
+        icon_exts = [".png", ".svg", ".svgz", ".xpm"]
+        icon_dir_base = os.path.join(config.USER_HOME, ".local/share/icons/hicolor")
+        
+        for size in icon_sizes:
+            size_dir = os.path.join(icon_dir_base, size, "apps")
+            if not os.path.isdir(size_dir):
+                continue
+            for ext in icon_exts:
+                icon_path_to_remove = os.path.join(size_dir, f"{icon_name_registered}{ext}")
+                if os.path.exists(icon_path_to_remove):
+                    try:
+                        os.remove(icon_path_to_remove)
+                        logger.info(f"Removed registered icon: {icon_path_to_remove}")
+                        icon_removed = True
+                    except OSError as e:
+                        logger.error(f"Failed to remove icon {icon_path_to_remove}: {e}")
+                        success = False
+                        
+        # Update icon cache if we removed any icons
+        if icon_removed and shutil.which("gtk-update-icon-cache"):
+            try:
+                subprocess.run(["gtk-update-icon-cache", "-f", "-t", icon_dir_base], check=False, capture_output=True)
+                logger.info(f"Updated icon cache: {icon_dir_base}")
+            except Exception as e:
+                logger.warning(f"Failed to update icon cache: {e}")
+    else:
+        logger.debug("No registered icon name found in app_info, skipping icon removal.")
+
+    return success
+
+# ... (check_system_compatibility and other existing functions) ...
+# ... (find_leftovers and remove_selected_leftovers) ...
+

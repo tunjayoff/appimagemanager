@@ -36,23 +36,15 @@ DEFAULT_LANGUAGE = "en"  # Default language code (en, tr)
 DEFAULT_INSTALL_MODE = "user"  # "system" (/usr) or "user" (~/.local) or "custom"
 
 # Installation destinations
-INSTALL_DESTINATIONS = {
-    "system": {
-        "path": "/usr",
-        "requires_root": True,
-        "description": "System-wide installation (/usr) - Requires root privileges!",
-    },
-    "user": {
-        "path": os.path.join(USER_HOME, ".local"),
-        "requires_root": False,
-        "description": "User installation (~/.local) - Safer option",
-    },
-    "custom": {
-        "path": "",
-        "requires_root": None,  # Depends on the selected path
-        "description": "Custom location (specify a path)",
-    }
-}
+# DEPRECATED - We will handle modes directly in the UI and utils
+# INSTALL_DESTINATIONS = { ... }
+
+# Management Types (New)
+MGMT_TYPE_INSTALLED = "installed" # App files extracted, symlinked
+MGMT_TYPE_REGISTERED = "registered" # Original AppImage file used, only registered in DB (+optional desktop/icon)
+
+# Default Management Type (Can be used if needed, but likely install page decides)
+# DEFAULT_MGMT_TYPE = MGMT_TYPE_INSTALLED
 
 # GUI settings
 WINDOW_WIDTH = 850
