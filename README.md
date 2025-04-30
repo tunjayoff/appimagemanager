@@ -2,7 +2,6 @@
 
 > Easily install, manage, and remove AppImage applications on Ubuntu 24.04, with full JSON-based multi-language support.
 
-[![CI](https://github.com/tunjayoff/appimagemanager/actions/workflows/ci.yml/badge.svg)](https://github.com/tunjayoff/appimagemanager/actions)
 [![PyPI version](https://badge.fury.io/py/appimagemanager.svg)](https://badge.fury.io/py/appimagemanager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -13,6 +12,8 @@ GitHub: [https://github.com/tunjayoff/appimagemanager](https://github.com/tunjay
 ## 📸 Screenshots
 
 ![Main Window](docs/screenshot.png)
+
+## English
 
 ## Table of Contents
 
@@ -103,78 +104,69 @@ flake8 appimagemanager/
 - Maintainer: [tunjayoff](https://github.com/tunjayoff)
 - Repository: https://github.com/tunjayoff/appimagemanager
 
-## English
-
-`appimagemanager` is a tool for Ubuntu to easily install, manage, and remove AppImage applications.
-
-### Features
-
-- Install AppImages system-wide or for the current user
-- List, search, and filter installed applications
-- Create desktop entries and menu items
-- Launch and uninstall applications directly from the manager
-- Multi-language support (JSON-based translation files)
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/tunjayoff/appimagemanager.git
-cd appimagemanager
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the application
-python3 main.py
-```
-
-### Contributing
-
-1. Fork the repository and create a branch (`git checkout -b feature/YourFeature`)
-2. Commit your changes (`git commit -m "Add some feature"`)
-3. Push to your branch (`git push origin feature/YourFeature`)
-4. Open a Pull Request
-
-### License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
 ## Türkçe
 
-`appimagemanager`, Ubuntu üzerinde AppImage uygulamalarını kolayca yüklemenize, yönetmenize ve kaldırmanıza yardımcı olan bir araçtır.
+## Açıklama
+AppImage Manager, Ubuntu 24.04 ve üzeri için kullanıcı dostu bir masaüstü uygulamasıdır. AppImage uygulamalarının sistem çapında veya kullanıcı bazında yüklenmesi, düzenlenmesi, başlatılması ve kaldırılmasını kolaylaştırır. Dinamik PyQt6 arayüzü, JSON tabanlı çoklu dil desteği ve açık/koyu tema seçenekleriyle iş akışınıza sorunsuzca uyum sağlar.
 
-### Özellikler
+## Özellikler
 
-- AppImage dosyalarını sistem geneline veya kullanıcı bazında kurma
-- Yüklenen uygulamaların listelenmesi, arama ve filtreleme
-- Masaüstü girdileri ve menü öğeleri oluşturma
-- Uygulamaları doğrudan yönetici üzerinden başlatma ve kaldırma
-- Çoklu dil desteği (JSON tabanlı çeviri dosyaları)
+- Sistem çapında ve kullanıcı bazında AppImage yüklemeleri
+- Yüklü AppImage'ları keşfetme, arama, filtreleme ve başlatma
+- Masaüstü kısayolları ve menü girdileri otomatik oluşturma
+- Tek tıklamayla kaldırma ve temizlik
+- Yeniden başlatma gerektirmeden gerçek zamanlı dil değişimi
+- Animasyonlu açık/kapalı tema geçişi
+- Sürükle-bırak ile kolay yükleme
 
-### Kurulum
+## Kurulum
+1. Repoyu klonlayın:
+   ```bash
+   git clone https://github.com/tunjayoff/appimagemanager.git
+   cd appimagemanager
+   ```
+2. Bağımlılıkları yükleyin:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Uygulamayı başlatın:
+   ```bash
+   python3 main.py
+   ```
 
+## Kullanım
+Uygulamayı başlattıktan sonra kenar çubuğunu kullanarak gezinin:
+- **Install**: Yeni AppImage dosyalarını seçip yükleyin.
+- **Manage**: Yüklü uygulamaları göz atın, arayın, başlatın veya kaldırın.
+- **Settings**: Dil, tema ve varsayılanları yapılandırın.
+- **About**: Sürüm, geliştirici ve sistem bilgilerini görüntüleyin.
+
+## Yapılandırma
+Kullanıcı ayarları `~/.config/appimage-manager/settings.json` içinde saklanır. Bu dosyayı elle düzenleyebilir veya UI üzerindeki Ayarlar sayfasını kullanabilirsiniz.
+
+## Çeviriler
+Tüm arayüz metinleri `resources/translations_<lang>.json` dosyalarında bulunur. Yeni dil eklemek için:
+1. Var olan bir JSON dosyasını `translations_<new>.json` olarak kopyalayın.
+2. Anahtar-değer çiftlerini çevirin.
+3. Uygulamayı yeniden başlatın veya dil değiştirin.
+
+## Tema
+Araç çubuğundaki anahtar ile açık/kapalı tema arasında geçiş yapın. Tema tercihleri otomatik kaydedilir.
+
+## Geliştirme & Test
+Birim testlerini pytest ile çalıştırın:
 ```bash
-# Depoyu klonlayın
-git clone https://github.com/tunjayoff/appimagemanager.git
-cd appimagemanager
-
-# Gerekli paketleri yükleyin
-pip install -r requirements.txt
-
-# Uygulamayı çalıştırın
-python3 main.py
+pytest tests/
+```
+Flake8 ile lint kontrolü yapın:
+```bash
+flake8 appimagemanager/
 ```
 
-### Katkıda Bulunma
+## Teşekkürler
+- PyQt6 ve Python 3 ile geliştirildi.
+- Yerel Linux paket yöneticilerinden ilham alındı.
 
-1. Depoyu forkladıktan sonra kendi dalınızı oluşturun (`git checkout -b feature/Özellikiniz`)
-2. Değişikliklerinizi commit edin (`git commit -m "Yeni özellik eklendi"`)
-3. Branch'i pushlayın (`git push origin feature/Özellikiniz`)
-4. Pull Request açın
-
-### Lisans
-
-Bu proje MIT lisansı ile lisanslanmıştır - detaylar için [LICENSE](LICENSE) dosyasına bakın. 
+## İletişim
+- Bakımcı: [tunjayoff](https://github.com/tunjayoff)
+- Depo: https://github.com/tunjayoff/appimagemanager 
