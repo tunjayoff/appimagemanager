@@ -1,0 +1,638 @@
+"""
+AppImage Manager - Manage Page UI
+Provides the graphical interface for listing and managing installed AppImages.
+"""
+
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                             QPushButton, QTableWidget, QTableWidgetItem, 
+                             QAbstractItemView, QHeaderView, QMessageBox,
+                             QProgressBar, QApplication, QToolButton, QSizePolicy,
+                             QLineEdit)
+from PyQt6.QtGui import QIcon, QColor, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QSize
+import os
+import shutil # Import shutil for rmtree
+import subprocess # For running applications
+
+import config
+from i18n import get_translator
+from db_manager import DBManager # To interact with the database
+import sudo_helper # ADD THIS IMPORT
+# Import other necessary modules like appimage_utils or sudo_helper later
+
+# Get the translator instance
+translator = get_translator()
+
+class ManagePage(QWidget):
+    """UI elements for managing installed AppImages."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("managePage")
+        
+        # --- Main Layout ---
+        main_layout = QVBoxLayout(self)
+
+        # --- Search Box ---
+        search_layout = QHBoxLayout()
+        search_label = QLabel(translator.get_text("Search:"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText(translator.get_text("Search by name, version..."))
+        self.search_box.setClearButtonEnabled(True)
+        search_layout.addWidget(search_label)
+        search_layout.addWidget(self.search_box)
+        main_layout.addLayout(search_layout)
+
+        # --- Toolbar ---
+        toolbar_layout = QHBoxLayout()
+        self.refresh_button = QPushButton(QIcon.fromTheme("view-refresh"), translator.get_text("Refresh List"))
+        self.uninstall_button = QPushButton(QIcon.fromTheme("edit-delete"), translator.get_text("Uninstall Selected"))
+        self.run_button = QPushButton(QIcon.fromTheme("media-playback-start"), translator.get_text("Run Application"))
+        self.run_button.setEnabled(False) # Disable initially
+        self.uninstall_button.setEnabled(False) # Disable initially
+        
+        toolbar_layout.addWidget(self.refresh_button)
+        toolbar_layout.addStretch(1)
+        toolbar_layout.addWidget(self.run_button)
+        toolbar_layout.addWidget(self.uninstall_button)
+        main_layout.addLayout(toolbar_layout)
+
+        # --- Application Table ---
+        self.app_table = QTableWidget()
+        self.app_table.setColumnCount(5) # Icon, Name, Version, Path, Status
+        self.app_table.setHorizontalHeaderLabels([
+            "", # Icon column
+            translator.get_text("Application Name"), 
+            translator.get_text("Version"), 
+            translator.get_text("Installation Path"),
+            translator.get_text("Status")
+        ])
+        # Table visual settings
+        self.app_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.app_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.app_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers) # Read-only
+        self.app_table.verticalHeader().setVisible(False) # Hide row numbers
+        self.app_table.horizontalHeader().setStretchLastSection(True)
+        # Adjust column widths (Icon column narrow, Name wider)
+        self.app_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.app_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self.app_table.setColumnWidth(1, 250) # Initial width for Name
+        self.app_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.app_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch) # Path stretches
+        self.app_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Status column fits content
+        # Set bigger icon size
+        self.app_table.setIconSize(QSize(32, 32))
+
+        main_layout.addWidget(self.app_table)
+        
+        # --- Status Bar ---
+        status_layout = QHBoxLayout()
+        
+        # Status label
+        self.status_label = QLabel(translator.get_text("Ready"))
+        
+        # Progress bar (hidden initially)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setMaximumHeight(10)  # Make it less obtrusive
+        
+        status_layout.addWidget(self.status_label)
+        status_layout.addWidget(self.progress_bar)
+        status_layout.setStretch(0, 1)  # Give the label more space
+        
+        main_layout.addLayout(status_layout)
+
+        # --- Connect Signals ---
+        self.refresh_button.clicked.connect(self.refresh_app_list)
+        self.uninstall_button.clicked.connect(self.uninstall_selected_app)
+        self.run_button.clicked.connect(self.run_selected_app)
+        self.app_table.itemSelectionChanged.connect(self.update_button_states)
+        self.app_table.doubleClicked.connect(self.handle_table_double_click)
+        self.search_box.textChanged.connect(self.filter_apps)
+
+        # --- Initial Population ---
+        self.refresh_app_list() # Load list on startup
+        
+    def show_loading(self, is_loading=True, message=None):
+        """Show or hide loading indicator and set status message"""
+        if is_loading:
+            self.progress_bar.setVisible(True)
+            self.refresh_button.setEnabled(False)
+            self.run_button.setEnabled(False)
+            self.uninstall_button.setEnabled(False)
+            if message:
+                self.status_label.setText(message)
+            QApplication.processEvents()  # Force UI update
+        else:
+            self.progress_bar.setVisible(False)
+            self.refresh_button.setEnabled(True)
+            self.update_button_states()  # Re-check if buttons should be enabled
+            if message:
+                self.status_label.setText(message)
+            QApplication.processEvents()  # Force UI update
+
+    def refresh_app_list(self):
+        """Loads installed applications from the database and populates the table."""
+        logger.info("Refreshing installed app list...")
+        self.show_loading(True, translator.get_text("Loading applications..."))
+        
+        self.app_table.setRowCount(0) # Clear existing rows
+        try:
+            db = DBManager()
+            apps = db.get_all_apps()
+            
+            self.app_table.setRowCount(len(apps))
+            for row, app_data in enumerate(apps):
+                is_missing = False # Flag to track if files are missing
+                install_path = app_data.get("app_install_dir")
+                if not install_path or not os.path.exists(install_path):
+                    is_missing = True
+                    logger.warning(f"Installation path not found for app '{app_data.get('name')}': {install_path}")
+
+                # --- Icon --- 
+                icon_item = QTableWidgetItem()
+                icon = QIcon.fromTheme("application-x-appimage") # Default icon
+                
+                # Try different sources for the icon
+                icon_found = False
+                
+                # 1. Try icon_path from database
+                if app_data.get("icon_path") and os.path.exists(app_data["icon_path"]):
+                    icon = QIcon(app_data["icon_path"])
+                    icon_found = True
+                
+                # 2. Try standard icon locations with app_name
+                if not icon_found and app_data.get("name"):
+                    app_name = app_data.get("name").lower()
+                    # Check in standard user icon locations
+                    icon_dirs = [
+                        os.path.join(config.USER_HOME, ".local/share/icons/hicolor"),
+                        "/usr/share/icons/hicolor"
+                    ]
+                    for icon_dir in icon_dirs:
+                        if os.path.exists(icon_dir):
+                            # Check common sizes in reverse order (prefer larger)
+                            for size in ["128x128", "64x64", "48x48", "32x32"]:
+                                for ext in [".png", ".svg"]:
+                                    icon_path = os.path.join(icon_dir, size, "apps", f"{app_name}{ext}")
+                                    if os.path.exists(icon_path):
+                                        icon = QIcon(icon_path)
+                                        icon_found = True
+                                        break
+                                if icon_found:
+                                    break
+                        if icon_found:
+                            break
+                            
+                # Set the icon and make it bigger
+                icon_item.setIcon(icon)
+                self.app_table.setItem(row, 0, icon_item)
+
+                # --- Name --- 
+                name_item = QTableWidgetItem(app_data.get("name", translator.get_text("Unknown")))
+                self.app_table.setItem(row, 1, name_item)
+
+                # --- Version --- 
+                version_item = QTableWidgetItem(app_data.get("version", "-"))
+                self.app_table.setItem(row, 2, version_item)
+
+                # --- Path --- 
+                path_item = QTableWidgetItem(app_data.get("app_install_dir", translator.get_text("N/A")))
+                self.app_table.setItem(row, 3, path_item)
+
+                # --- Status --- 
+                status_text = translator.get_text("OK") if not is_missing else translator.get_text("Missing")
+                status_item = QTableWidgetItem(status_text)
+                self.app_table.setItem(row, 4, status_item)
+
+                # Store the App ID in the first column's item data for later retrieval
+                # Using Qt.ItemDataRole.UserRole for custom data storage
+                name_item.setData(Qt.ItemDataRole.UserRole, app_data.get("id"))
+                # Store the missing status as well
+                name_item.setData(Qt.ItemDataRole.UserRole + 1, is_missing)
+                # Store the executable path
+                name_item.setData(Qt.ItemDataRole.UserRole + 2, app_data.get("executable_path"))
+                # Log the ID being set for debugging
+                logger.debug(f"Setting data for row {row}: AppID={app_data.get('id')}, Missing={is_missing}")
+
+                # --- Apply visual style if missing --- 
+                if is_missing:
+                    missing_color = QColor(Qt.GlobalColor.gray)
+                    icon_item.setForeground(missing_color)
+                    name_item.setForeground(missing_color)
+                    version_item.setForeground(missing_color)
+                    path_item.setForeground(missing_color)
+                    status_item.setForeground(QColor("orange")) # Make status stand out
+
+            logger.info(f"Loaded {len(apps)} applications into the table.")
+            self.show_loading(False, translator.get_text("Ready"))
+        except Exception as e:
+            logger.error(f"Failed to load application list: {e}", exc_info=True)
+            self.show_loading(False, translator.get_text("Error loading applications"))
+            QMessageBox.warning(self, translator.get_text("Error"), 
+                                translator.get_text("Could not load the list of installed applications. Check logs for details."))
+        finally:
+            self.update_button_states() # Ensure button state is correct after refresh
+            
+    def handle_table_double_click(self, index):
+        """Handle double-clicking on a table row - run the app if not missing"""
+        # Get the selected row
+        row = index.row()
+        name_item = self.app_table.item(row, 1)
+        if not name_item:
+            return
+            
+        # Check if app is missing
+        is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
+        if is_missing:
+            QMessageBox.information(self, 
+                translator.get_text("Cannot Run"), 
+                translator.get_text("This application is missing its files and cannot be run."))
+            return
+            
+        # If not missing, run the app
+        self.run_selected_app()
+
+    def update_button_states(self):
+        """Enables or disables buttons based on table selection."""
+        selected_items = self.app_table.selectedItems()
+        has_selection = len(selected_items) > 0
+        
+        self.uninstall_button.setEnabled(has_selection)
+        
+        # Only enable Run button if the app is not missing
+        if has_selection:
+            selected_row = self.app_table.currentRow()
+            name_item = self.app_table.item(selected_row, 1)
+            if name_item:
+                is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
+                self.run_button.setEnabled(not is_missing)
+            else:
+                self.run_button.setEnabled(False)
+        else:
+            self.run_button.setEnabled(False)
+            
+    def run_selected_app(self):
+        """Run the selected application"""
+        selected_row = self.app_table.currentRow()
+        if selected_row < 0:
+            return
+            
+        name_item = self.app_table.item(selected_row, 1)
+        if not name_item:
+            return
+            
+        app_name = name_item.text()
+        is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
+        executable_path = name_item.data(Qt.ItemDataRole.UserRole + 2)
+        
+        if is_missing:
+            QMessageBox.information(self, 
+                translator.get_text("Cannot Run"), 
+                translator.get_text("This application is missing its files and cannot be run."))
+            return
+            
+        if not executable_path or not os.path.exists(executable_path):
+            logger.error(f"Cannot run '{app_name}': Executable path not found: {executable_path}")
+            QMessageBox.warning(self,
+                translator.get_text("Run Error"),
+                translator.get_text("Could not find the executable for '{app_name}'.").format(app_name=app_name))
+            return
+            
+        try:
+            logger.info(f"Starting application: {executable_path}")
+            self.status_label.setText(translator.get_text("Starting {app_name}...").format(app_name=app_name))
+            
+            # Use subprocess to start the application in the background
+            subprocess.Popen([executable_path], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            
+            # Set a delayed status message reset
+            QTimer.singleShot(3000, lambda: self.status_label.setText(translator.get_text("Ready")))
+            
+        except Exception as e:
+            logger.error(f"Failed to start application '{app_name}': {e}")
+            QMessageBox.critical(self,
+                translator.get_text("Run Error"),
+                translator.get_text("Failed to start '{app_name}': {error}").format(app_name=app_name, error=str(e)))
+
+    def uninstall_selected_app(self):
+        """Starts the uninstallation process for the selected app, handling missing files."""
+        selected_rows = self.app_table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+
+        selected_row_index = selected_rows[0].row()
+        name_item = self.app_table.item(selected_row_index, 1)
+        if not name_item:
+            logger.error("Could not get name item from selected row.")
+            return
+
+        app_id = name_item.data(Qt.ItemDataRole.UserRole)
+        is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
+        app_name = name_item.text() # Get app name for messages
+
+        # Handle case where App ID might be missing (None)
+        if not app_id and not is_missing:
+            # This is an unexpected state: no ID but files are supposedly present?
+            logger.error(f"Corrupted entry for '{app_name}': Missing ID but files reported as present.")
+            QMessageBox.critical(self, translator.get_text("Data Error"), 
+                                 translator.get_text("The database entry for '{app_name}' is inconsistent (missing ID). Cannot proceed with uninstall.").format(app_name=app_name))
+            return
+        # If ID is missing BUT files are also missing, we can offer to remove the DB entry.
+
+        logger.info(f"Uninstall requested for App ID: {app_id} (Name: '{app_name}', Missing Files: {is_missing})")
+
+        # 1. Ask for confirmation
+        confirm_text = translator.get_text("Are you sure you want to uninstall '{app_name}'?").format(app_name=app_name)
+        if is_missing:
+            if app_id:
+                confirm_text = translator.get_text("The files for '{app_name}' seem to be missing. Remove the database entry anyway?").format(app_name=app_name)
+            else:
+                confirm_text = translator.get_text("The files for '{app_name}' seem to be missing and it has no ID. Remove the corrupt database entry?").format(app_name=app_name)
+        
+        reply = QMessageBox.question(self, translator.get_text("Confirm Uninstall"), confirm_text,
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                     QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.No:
+            logger.info("Uninstall cancelled by user.")
+            return
+
+        # --- Start Uninstallation --- 
+        self.show_loading(True, translator.get_text("Uninstalling {app_name}...").format(app_name=app_name))
+        try:
+            db = DBManager()
+            app_info = db.get_app(app_id)
+            if not app_info and app_id:
+                 # Should not happen if list is correct and app_id exists, but handle defensively
+                 logger.error(f"App info not found in DB for ID: {app_id} despite being in table. Removing potentially stale entry.")
+                 if db.remove_app(app_id): # Try removing by ID anyway
+                      QMessageBox.information(self, translator.get_text("Stale Entry Removed"), translator.get_text("Removed stale database entry for '{app_name}'.").format(app_name=app_name))
+                 else:
+                      QMessageBox.warning(self, translator.get_text("Error"), translator.get_text("Could not remove stale database entry."))
+                 self.refresh_app_list()
+                 return
+            elif not app_info and not app_id and is_missing:
+                 # This is the case where ID is None, files are missing, and we confirmed removal
+                 logger.warning(f"Attempting to remove entry for '{app_name}' without an ID.")
+                 # We need to manually find and remove the entry from the list
+                 all_apps = db.get_all_apps()
+                 original_count = len(all_apps)
+                 # Find the entry matching the name, missing ID, and likely missing path
+                 # This assumes name is unique enough for this edge case
+                 apps_to_keep = [app for app in all_apps 
+                                 if not (app.get('name') == app_name and app.get('id') is None)]
+                 
+                 if len(apps_to_keep) < original_count:
+                     db.data['installed_apps'] = apps_to_keep
+                     if db._save_db():
+                         logger.info(f"Successfully removed entry for '{app_name}' (without ID).")
+                         self._cleanup_icon_files(app_name.lower())  # Clean up icon files anyway
+                         QMessageBox.information(self, translator.get_text("Entry Removed"), 
+                                                 translator.get_text("Removed database entry for '{app_name}'.").format(app_name=app_name))
+                     else:
+                         logger.error(f"Failed to save database after removing entry for '{app_name}' (without ID).")
+                         QMessageBox.critical(self, translator.get_text("Database Error"), translator.get_text("Failed to save the database after removing the entry."))
+                 else:
+                     logger.error(f"Could not find the specific entry for '{app_name}' (without ID) to remove.")
+                     QMessageBox.warning(self, translator.get_text("Error"), translator.get_text("Could not find the database entry to remove."))
+                 self.refresh_app_list()
+                 return
+            # If app_info exists (meaning app_id was likely valid), proceed as before
+
+            # --- File/Symlink Removal (only if not missing) --- 
+            files_removed_successfully = False
+            if not is_missing:
+                logger.info("Attempting to remove application files and symlinks...")
+                install_dir = app_info.get("app_install_dir")
+                symlinks = app_info.get("symlinks_created", [])
+                install_mode = app_info.get("install_mode", "unknown") # Need mode to check for root
+                icon_name = app_info.get("name", "").lower()  # For cleaning up icon files
+                
+                # Determine if root is needed (Simplified check - relies on stored install_mode)
+                requires_root = (install_mode == "system") 
+                # TODO: Add more robust check for custom installs based on path permissions if needed
+
+                commands_to_run = []
+                non_root_operations = []
+
+                # Prepare operations/commands
+                for link in symlinks:
+                    if link: # Ensure link path is not empty
+                        if requires_root:
+                            commands_to_run.append(f"rm -f \"{link}\"")
+                        else:
+                            non_root_operations.append(("remove_file", link))
+                
+                if install_dir and os.path.exists(install_dir): # Check existence again
+                    if requires_root:
+                        commands_to_run.append(f"rm -rf \"{install_dir}\"")
+                    else:
+                        non_root_operations.append(("remove_dir", install_dir))
+
+                # Execute operations
+                operation_success = True
+                if requires_root:
+                    if commands_to_run:
+                        logger.debug(f"Executing uninstall commands with sudo: {commands_to_run}")
+                        sudo_success, output = sudo_helper.execute_commands_with_sudo(commands_to_run)
+                        if not sudo_success:
+                            logger.error(f"Sudo uninstall commands failed. Output: {output}")
+                            QMessageBox.critical(self, translator.get_text("Uninstall Error"), translator.get_text("Failed to remove application files/links (requires root). Check logs."))
+                            operation_success = False
+                        else:
+                            logger.info("Sudo uninstall commands executed successfully.")
+                            # For root installs, we need to clean up icon files separately
+                            if icon_name:
+                                self._cleanup_icon_files(icon_name)
+                    else:
+                         logger.info("No root commands needed for uninstallation (System mode but maybe no files/links found).")
+                else: # Non-root operations
+                    for op_type, path in non_root_operations:
+                        try:
+                            if op_type == "remove_file" and os.path.lexists(path):
+                                os.remove(path)
+                                logger.info(f"Removed symlink: {path}")
+                            elif op_type == "remove_dir" and os.path.exists(path):
+                                shutil.rmtree(path)
+                                logger.info(f"Removed directory: {path}")
+                        except OSError as os_err:
+                             logger.error(f"Error during non-root removal of {path}: {os_err}")
+                             QMessageBox.warning(self, translator.get_text("Uninstall Warning"), translator.get_text("Could not remove some files/links: {path}. Please check manually.").format(path=path))
+                             # Don't necessarily fail the whole process for one file error
+                             # operation_success = False 
+                    
+                    # For non-root installs, clean up icon files after main operations
+                    if icon_name:
+                        self._cleanup_icon_files(icon_name)
+                
+                files_removed_successfully = operation_success
+            else:
+                 logger.info("Files marked as missing, skipping file/symlink removal.")
+                 # Even if files are missing, we should still clean up icon files if possible
+                 if app_info and app_info.get("name"):
+                     self._cleanup_icon_files(app_info.get("name").lower())
+                 files_removed_successfully = True # Treat as success for DB removal step
+
+            # --- Remove from Database --- 
+            if files_removed_successfully:
+                 logger.info(f"Removing application '{app_name}' from database...")
+                 if app_id and db.remove_app(app_id):
+                     logger.info("Successfully removed app from database.")
+                     self.show_loading(False, translator.get_text("Uninstallation of {app_name} completed").format(app_name=app_name))
+                     QMessageBox.information(self, translator.get_text("Uninstall Successful"), 
+                                             translator.get_text("'{app_name}' has been successfully uninstalled.").format(app_name=app_name))
+                 elif not app_id and is_missing: # Case handled above, this is just a confirmation message path
+                     pass # Message already shown or error occurred during manual removal
+                 else: # Failed to remove by ID or other error
+                     logger.error(f"Removed files (or skipped), but failed to remove app from database (ID: {app_id})")
+                     self.show_loading(False, translator.get_text("Error updating database"))
+                     QMessageBox.critical(self, translator.get_text("Database Error"), translator.get_text("Removed application files, but failed to update the database. Please refresh."))
+            else:
+                 # Error message was shown during file removal failure
+                 logger.warning("Skipping database removal because file/symlink removal failed.")
+                 self.show_loading(False, translator.get_text("Uninstallation failed"))
+                 
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during uninstall: {e}", exc_info=True)
+            self.show_loading(False, translator.get_text("Uninstallation error"))
+            QMessageBox.critical(self, translator.get_text("Uninstall Error"), translator.get_text("An unexpected error occurred: {error}").format(error=e))
+        finally:
+            # Refresh the list regardless of outcome to show current state
+            self.refresh_app_list()
+            
+    def _cleanup_icon_files(self, app_name):
+        """Clean up icon files from the standard icon directories"""
+        if not app_name:
+            return
+            
+        logger.info(f"Cleaning up icon files for {app_name}")
+        
+        # Standard sizes to check for icons
+        icon_sizes = ["16x16", "22x22", "24x24", "32x32", "48x48", "64x64", "128x128", "256x256", "512x512", "scalable"]
+        icon_exts = [".png", ".svg", ".svgz", ".xpm"]
+        
+        # Base directories to check
+        icon_dirs = [
+            os.path.join(config.USER_HOME, ".local/share/icons/hicolor"),
+            "/usr/share/icons/hicolor"  # This would require root to clean
+        ]
+        
+        # Only try to clean user's directories unless we're root
+        is_root = os.geteuid() == 0
+        if not is_root:
+            icon_dirs = [icon_dirs[0]]
+        
+        removed_count = 0
+        for icon_dir in icon_dirs:
+            if not os.path.exists(icon_dir):
+                continue
+                
+            for size in icon_sizes:
+                size_dir = os.path.join(icon_dir, size, "apps")
+                if not os.path.exists(size_dir):
+                    continue
+                    
+                for ext in icon_exts:
+                    icon_path = os.path.join(size_dir, f"{app_name}{ext}")
+                    if os.path.exists(icon_path):
+                        try:
+                            os.remove(icon_path)
+                            logger.info(f"Removed icon file: {icon_path}")
+                            removed_count += 1
+                        except (OSError, PermissionError) as e:
+                            logger.warning(f"Failed to remove icon file {icon_path}: {e}")
+        
+        # Update icon cache if we removed any files
+        if removed_count > 0:
+            try:
+                if shutil.which("gtk-update-icon-cache"):
+                    subprocess.run(
+                        ["gtk-update-icon-cache", "-f", "-t", os.path.join(config.USER_HOME, ".local/share/icons/hicolor")],
+                        check=False,
+                        capture_output=True
+                    )
+                    logger.info("Updated icon cache after removing icon files")
+            except Exception as e:
+                logger.warning(f"Failed to update icon cache: {e}")
+                
+        return removed_count
+
+    def filter_apps(self, search_text):
+        """Filter the app table based on search text"""
+        search_text = search_text.lower()
+        
+        # If empty, show all rows
+        if not search_text:
+            for row in range(self.app_table.rowCount()):
+                self.app_table.setRowHidden(row, False)
+            return
+            
+        # Otherwise, filter based on text
+        for row in range(self.app_table.rowCount()):
+            show_row = False
+            
+            # Check name (column 1)
+            name_item = self.app_table.item(row, 1)
+            if name_item and search_text in name_item.text().lower():
+                show_row = True
+                
+            # Check version (column 2)
+            version_item = self.app_table.item(row, 2)
+            if version_item and search_text in version_item.text().lower():
+                show_row = True
+                
+            # Check path (column 3)
+            path_item = self.app_table.item(row, 3)
+            if path_item and search_text in path_item.text().lower():
+                show_row = True
+                
+            # Show/hide the row based on match
+            self.app_table.setRowHidden(row, not show_row)
+
+    def retranslateUi(self):
+        """Update all UI texts for language changes"""
+        translator = get_translator()  # Get fresh translator
+        
+        # Update buttons
+        self.refresh_button.setText(translator.get_text("Refresh List"))
+        self.uninstall_button.setText(translator.get_text("Uninstall Selected"))
+        self.run_button.setText(translator.get_text("Run Application"))
+        
+        # Update search label and placeholder
+        search_layout = self.search_box.parent().layout()
+        if search_layout:
+            for i in range(search_layout.count()):
+                item = search_layout.itemAt(i)
+                if item.widget() and isinstance(item.widget(), QLabel):
+                    item.widget().setText(translator.get_text("Search:"))
+        
+        self.search_box.setPlaceholderText(translator.get_text("Search by name, version..."))
+        
+        # Update table headers
+        self.app_table.setHorizontalHeaderLabels([
+            "",  # Icon column
+            translator.get_text("Application Name"),
+            translator.get_text("Version"),
+            translator.get_text("Installation Path"),
+            translator.get_text("Status")
+        ])
+        
+        # Update status label
+        if not self.progress_bar.isVisible():
+            self.status_label.setText(translator.get_text("Ready"))
+
+# --- Logger Setup (Example - Adapt as needed) ---
+import logging
+logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    # Add basic handler if none exist, prevents 'No handlers could be found' error
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(levelname)s: %(name)s: %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG) # Set level to DEBUG to see all messages 
