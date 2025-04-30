@@ -345,6 +345,11 @@ class MainWindow(QMainWindow):
         # Add animated toggle switch for dark mode
         from .widgets import ToggleSwitch
         self.theme_toggle_button = ToggleSwitch()
+        # Prepare theme icons for toggle
+        self.sun_icon = QIcon.fromTheme("weather-clear")
+        self.moon_icon = QIcon.fromTheme("weather-clear-night")
+        # Set initial toggle icon based on current theme
+        self.theme_toggle_button.setIcon(self.moon_icon if self.dark_mode else self.sun_icon)
         # Initialize switch state
         self.theme_toggle_button.setChecked(self.dark_mode)
         self.theme_toggle_button.setToolTip(self.translator.get_text("toggle_dark_mode"))

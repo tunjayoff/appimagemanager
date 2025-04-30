@@ -24,6 +24,7 @@ GitHub: [https://github.com/tunjayoff/appimagemanager](https://github.com/tunjay
 - [Configuration](#configuration)
 - [Translations](#translations)
 - [Theming](#theming)
+- [Build & Installation Script](#build--installation-script)
 - [Development & Testing](#development--testing)
 - [Contributing](#contributing)
 - [License](#license)
@@ -82,6 +83,24 @@ All UI strings reside in `resources/translations_<lang>.json`. To add a new lang
 ## Theming
 
 Toggle light/dark mode via the switch in the toolbar. Theme preferences are saved automatically.
+
+## Build & Installation Script
+
+A convenience script `build_and_install.sh` automates creating a standalone executable, packaging it into a Debian `.deb`, and installing it system-wide.
+
+Prerequisites:
+```bash
+sudo apt update
+sudo apt install -y python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
+```
+
+Usage:
+```bash
+chmod +x build_and_install.sh
+./build_and_install.sh
+# Then launch with:
+appimagemanager
+```
 
 ## Development & Testing
 

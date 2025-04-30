@@ -16,6 +16,11 @@ pip-delete-this-directory.txt
 venv/
 env/
 ENV/
+.venv/
+
+# Debian packaging artifacts
+deb_pkg/
+*.deb
 
 # PyInstaller
 *.spec
