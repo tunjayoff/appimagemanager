@@ -12,7 +12,7 @@ AppImage Manager provides a user-friendly interface to install, organize, launch
 
 ## 📸 Screenshot
 
-![Main Window](documentation/screenshot.png)
+![Main Window](images/screenshot.png)
 
 ---
 
