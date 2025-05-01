@@ -81,20 +81,42 @@ class DBManager:
 
     def _save_db(self, data_to_save=None):
         """Veritabanı değişikliklerini kaydeder."""
-        # Use provided data if available (for initial load saving), otherwise use self.data
         current_data = data_to_save if data_to_save is not None else self.data
-        
         current_data["last_updated"] = datetime.datetime.now().isoformat()
+        
+        # --- Log the data being saved for debugging --- 
+        logger.debug(f"Attempting to save database to {self.db_path}. Data to save:")
         try:
-            with open(self.db_path, 'w', encoding='utf-8') as f:
+            # Log a truncated version for readability if it's large
+            data_str = json.dumps(current_data, ensure_ascii=False, indent=2)
+            if len(data_str) > 1000:
+                 logger.debug(data_str[:1000] + "... (truncated)")
+            else:
+                 logger.debug(data_str)
+        except Exception as log_e:
+            logger.error(f"Error converting data to JSON for logging: {log_e}")
+        # --- End logging --- 
+        
+        try:
+            # --- Use atomic write pattern --- 
+            temp_db_path = self.db_path + ".tmp"
+            with open(temp_db_path, 'w', encoding='utf-8') as f:
                 json.dump(current_data, f, ensure_ascii=False, indent=4)
-            # If we saved data passed as argument, update self.data as well
+            # If dump succeeded, replace the original file
+            os.replace(temp_db_path, self.db_path) # Atomic operation on most systems
+            # ----------------------------------
+            
             if data_to_save is not None:
                 self.data = current_data
-            logger.debug("Veritabanı değişiklikleri kaydedildi")
+            logger.info("Veritabanı değişiklikleri başarıyla kaydedildi.") # Changed from debug to info
             return True
         except Exception as e:
-            logger.error(f"Veritabanı kaydedilirken hata: {e}")
+            # --- Log the specific error --- 
+            logger.error(f"Veritabanı kaydedilirken HATA: {e}", exc_info=True) 
+            # Clean up temp file if it exists
+            if os.path.exists(temp_db_path):
+                 try: os.remove(temp_db_path) 
+                 except OSError: pass
             return False
 
     def add_app(self, app_info):

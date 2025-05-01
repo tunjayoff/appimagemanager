@@ -1,147 +1,204 @@
 """
 AppImage Manager - Sudo Helper
-Provides utilities for running commands with elevated privileges.
+Provides utilities for running commands with elevated privileges using pkexec.
 """
 
 import subprocess
 import logging
-import tkinter as tk
-from tkinter import simpledialog
 import os
-import sys
+import shutil # Keep for shutil.which
 import tempfile
 
-from .i18n import _
+from .i18n import get_translator
 
 logger = logging.getLogger(__name__)
+translator = get_translator()
 
-class PasswordDialog(simpledialog.Dialog):
-    """Custom dialog for securely requesting a password."""
+# --- Remove old functions (get_sudo_password_qt, create_helper_script, execute_script_with_privileges, cleanup_script) ---
 
-    def __init__(self, parent, title, prompt):
-        self.prompt = prompt
-        super().__init__(parent, title)
+def run_command_with_pkexec(cmd_list):
+    """Executes a given command list with elevated privileges using pkexec.
 
-    def body(self, master):
-        """Create dialog body."""
-        tk.Label(master, text=self.prompt, wraplength=300).grid(row=0, padx=5, pady=5, sticky="w")
-        
-        self.password_var = tk.StringVar()
-        self.password_entry = tk.Entry(master, textvariable=self.password_var, show="*", width=30)
-        self.password_entry.grid(row=1, padx=5, pady=5)
-        self.password_entry.focus_set()
-        
-        return self.password_entry  # Initial focus
-
-    def apply(self):
-        """Store the password when OK is clicked."""
-        self.result = self.password_var.get()
-
-def get_sudo_password(parent, title=None, prompt=None):
-    """Show a dialog to get sudo password from the user.
-    
     Args:
-        parent: Parent Tkinter window
-        title (str, optional): Dialog title
-        prompt (str, optional): Password prompt message
-        
-    Returns:
-        str: The entered password or None if cancelled
-    """
-    if title is None:
-        title = _("Authentication Required")
-    
-    if prompt is None:
-        prompt = _("msg_enter_password")
+        cmd_list (list): The command and its arguments as a list of strings.
+                         Example: ["mkdir", "-p", "/some/path"]
 
-    dialog = PasswordDialog(parent, title, prompt)
-    return dialog.result  # Will be None if cancelled
-
-def run_with_sudo(command, password, stdin_input=None):
-    """Run a command with sudo privileges using the provided password.
-    
-    Args:
-        command (list): Command and arguments to run
-        password (str): Sudo password
-        stdin_input (str, optional): Data to pass to command's stdin
-        
     Returns:
-        tuple: (returncode, stdout, stderr)
+        tuple: (success_bool, output_str)
+               success_bool is True if the command exits with 0, False otherwise.
+               output_str contains combined stdout and stderr.
     """
+    if not cmd_list:
+        logger.error("Cannot execute command: Empty command list provided.")
+        return False, "Empty command list"
+
+    if not shutil.which("pkexec"):
+        logger.error("Failed to execute command: 'pkexec' not found in PATH. Is policykit-1 installed?")
+        return False, "'pkexec' command not found."
+
+    # Prepend pkexec to the command list
+    full_command = ["pkexec"] + cmd_list
+    
+    command_str_for_log = ' '.join(cmd_list) # Log command without pkexec for clarity
+    logger.info(f"Executing with pkexec: {command_str_for_log}")
+    logger.debug(f"Full command: {full_command}")
+
     try:
-        # Construct sudo command
-        sudo_command = ["sudo", "-S"] + command
-
-        # Run the command
-        process = subprocess.Popen(
-            sudo_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+        # Use subprocess.run to wait for completion
+        result = subprocess.run(
+            full_command,
+            capture_output=True, # Capture stdout and stderr
+            text=True,
+            encoding='utf-8',
+            check=False # Don't raise exception on non-zero exit code
         )
 
-        # Send the password followed by any additional stdin input
-        input_data = password + "\n"
-        if stdin_input:
-            input_data += stdin_input
+        success = (result.returncode == 0)
+        # Combine stdout and stderr for output
+        output = ""
+        if result.stdout:
+            output += result.stdout.strip() + "\n"
+        if result.stderr:
+            output += result.stderr.strip()
+        output = output.strip()
         
-        stdout, stderr = process.communicate(input=input_data)
-        
-        # Check if auth failed (common sudo error messages)
-        if "incorrect password" in stderr.lower() or "sorry, try again" in stderr.lower():
-            logger.error("Authentication failed: Incorrect password")
-            return (1, stdout, stderr)
-            
-        return (process.returncode, stdout, stderr)
-    except Exception as e:
-        logger.error(f"Error running command with sudo: {e}")
-        return (1, "", str(e))
+        logger.debug(f"pkexec command [' {command_str_for_log} '] finished. RC={result.returncode}. Output:\n---\n{output}\n---")
 
-def check_sudo_password(password):
-    """Check if the provided sudo password is valid.
+        if not success:
+             logger.error(f"pkexec command [' {command_str_for_log} '] failed. RC={result.returncode}.")
+        else:
+            logger.info(f"pkexec command [' {command_str_for_log} '] return code indicates success (RC=0).")
+
+        return success, output
+
+    except FileNotFoundError: # Should be caught by shutil.which, but for safety
+        logger.error("Failed to execute command: 'pkexec' not found (double check).")
+        return False, "'pkexec' command not found."
+    except Exception as e:
+        logger.error(f"Unexpected error executing command [' {command_str_for_log} '] with pkexec: {e}", exc_info=True)
+        error_message = f"Unexpected error: {e}"
+        if "authenticate" in str(e).lower() or "cancel" in str(e).lower():
+             error_message = translator.get_text("Authentication cancelled or failed.")
+        return False, error_message
+
+def run_commands_with_pkexec_script(command_list):
+    """Executes multiple commands with a single pkexec call by creating a bash script.
     
     Args:
-        password (str): Sudo password to check
-        
+        command_list (list): List of command lists to execute.
+                             Example: [["mkdir", "-p", "/some/path"], ["cp", "source", "dest"]]
+    
     Returns:
-        bool: True if password is valid, False otherwise
+        tuple: (success_bool, output_str)
+               success_bool is True if all commands exit with 0, False otherwise.
+               output_str contains combined stdout and stderr.
     """
-    try:
-        # Use a simple, harmless command to check the password
-        returncode, _, _ = run_with_sudo(["true"], password)
-        return returncode == 0
-    except Exception as e:
-        logger.error(f"Error checking sudo password: {e}")
-        return False
+    if not command_list:
+        logger.error("Cannot execute commands: Empty command list provided.")
+        return False, "Empty command list"
 
-def create_root_helper_script(commands):
-    """Create a temporary script that will be executed with sudo.
+    if not shutil.which("pkexec"):
+        logger.error("Failed to execute commands: 'pkexec' not found in PATH. Is policykit-1 installed?")
+        return False, "'pkexec' command not found."
     
-    This is useful for running multiple commands with a single sudo password prompt.
-    
-    Args:
-        commands (list): List of shell commands to include in the script
-        
-    Returns:
-        str: Path to the temporary script
-    """
     try:
         # Create a temporary script file
-        fd, script_path = tempfile.mkstemp(suffix='.sh')
+        script_fd, script_path = tempfile.mkstemp(prefix="aim_pkexec_", suffix=".sh")
+        script_content = "#!/bin/bash\n\n"
+        script_content += "set -e\n\n" # Exit on error
         
-        with os.fdopen(fd, 'w') as f:
-            f.write("#!/bin/bash\n\n")
-            f.write("# Generated by AppImage Manager\n\n")
+        # Add log functions
+        script_content += "log_cmd() {\n  echo \"Executing: $1\"\n}\n\n"
+        
+        # Convert each command list to a bash command and add to script
+        command_count = 0
+        for cmd in command_list:
+            if not cmd:
+                continue
             
-            # Add commands
-            for cmd in commands:
-                f.write(f"{cmd}\n")
+            # Special handling for sed commands
+            if cmd and len(cmd) >= 3 and cmd[0] == "sed" and cmd[1] == "-i":
+                # This is a sed -i command, make sure it's properly quoted for bash script
+                sed_pattern = cmd[2]
+                target_file = cmd[3] if len(cmd) > 3 else ""
+                
+                # Properly escape the sed pattern for bash
+                script_content += f"log_cmd 'sed -i \"{sed_pattern}\" {target_file}'\n"
+                script_content += f"sed -i \"{sed_pattern}\" {target_file}\n\n"
+            else:
+                # Special handling for commands with || (OR operator)
+                if "||" in cmd:
+                    # Find the index of "||"
+                    or_index = cmd.index("||")
+                    # Split the command into main part and fallback
+                    main_cmd = cmd[:or_index]
+                    fallback = cmd[or_index+1:]
+                    
+                    # Handle main command and fallback separately
+                    main_str = " ".join([f'"{arg}"' if ' ' in arg else arg for arg in main_cmd])
+                    fallback_str = " ".join([f'"{arg}"' if ' ' in arg else arg for arg in fallback])
+                    
+                    # Combine with the || operator
+                    cmd_str = f"{main_str} || {fallback_str}"
+                else:
+                    # Convert command list to a valid bash command string with proper quoting
+                    cmd_str = " ".join([f'"{arg}"' if ' ' in arg or '*' in arg else arg for arg in cmd])
+                
+                # Add command to script with logging
+                script_content += f"log_cmd '{cmd_str}'\n"
+                script_content += f"{cmd_str}\n\n"
+                
+            command_count += 1
         
-        # Make executable
-        os.chmod(script_path, 0o755)
+        # Write script content to file
+        with os.fdopen(script_fd, 'w') as f:
+            f.write(script_content)
         
-        return script_path
+        # Make script executable
+        os.chmod(script_path, 0o700)
+        logger.debug(f"Created temporary script with {command_count} commands: {script_path}")
+        
+        # Execute script with pkexec
+        logger.info(f"Executing script with pkexec: {script_path}")
+        result = subprocess.run(
+            ["pkexec", script_path],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=False
+        )
+        
+        success = (result.returncode == 0)
+        # Combine stdout and stderr for output
+        output = ""
+        if result.stdout:
+            output += result.stdout.strip() + "\n"
+        if result.stderr:
+            output += result.stderr.strip()
+        output = output.strip()
+        
+        logger.debug(f"pkexec script execution finished. RC={result.returncode}. Output:\n---\n{output}\n---")
+        
+        if not success:
+            logger.error(f"pkexec script execution failed. RC={result.returncode}.")
+        else:
+            logger.info(f"pkexec script execution successful (RC=0).")
+        
+        # Clean up the temporary script
+        try:
+            os.unlink(script_path)
+            logger.debug(f"Removed temporary script: {script_path}")
+        except Exception as e:
+            logger.warning(f"Failed to remove temporary script {script_path}: {e}")
+        
+        return success, output
+    
     except Exception as e:
-        logger.error(f"Error creating helper script: {e}")
-        return None 
+        logger.error(f"Unexpected error executing commands with pkexec script: {e}", exc_info=True)
+        error_message = f"Unexpected error: {e}"
+        if "authenticate" in str(e).lower() or "cancel" in str(e).lower():
+            error_message = translator.get_text("Authentication cancelled or failed.")
+        return False, error_message
+
+# Keep get_translator if it's used elsewhere, otherwise it can be removed too
+# Keep logger if used elsewhere

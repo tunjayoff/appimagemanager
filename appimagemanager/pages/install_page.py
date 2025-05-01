@@ -6,7 +6,8 @@ Provides the graphical interface for selecting and installing an AppImage.
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFileDialog, QGroupBox, QRadioButton, 
                              QProgressBar, QSpacerItem, QSizePolicy, QFormLayout,
-                             QToolButton, QMenu, QListWidget, QListWidgetItem)
+                             QToolButton, QMenu, QListWidget, QListWidgetItem,
+                             QApplication)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QEvent, QCoreApplication
 import os
 from PyQt6.QtGui import QIcon, QAction, QPixmap
@@ -14,6 +15,8 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap
 import uuid
 import datetime
 import shutil
+import shlex
+import tempfile
 
 from .. import config
 # from i18n import _ # Remove this import
@@ -30,9 +33,16 @@ translator = get_translator()
 
 class InstallPage(QWidget):
     """UI elements for the AppImage installation page."""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_manager=None, main_window=None):
         super().__init__(parent)
         self.setObjectName("installPage")
+        self.main_window = main_window # Store main window reference
+        if not db_manager:
+             # If not passed, create a default instance (less ideal but works)
+             logger.warning("DBManager not passed to InstallPage, creating default instance.")
+             self.db_manager = DBManager()
+        else:
+             self.db_manager = db_manager
         
         # --- Main Layout ---
         main_layout = QVBoxLayout(self)
@@ -295,6 +305,9 @@ class InstallPage(QWidget):
             self.update_status(translator.get_text("Error: Please select a valid AppImage file first."), error=True)
             return
 
+        # Temporary directories to clean up
+        self.temp_dirs = []
+        
         # --- Determine selected mode --- 
         management_type = config.MGMT_TYPE_INSTALLED # Default to installed unless register is checked
         install_mode = "user" # Default install mode if installed type
@@ -392,7 +405,7 @@ class InstallPage(QWidget):
                     if db.add_app(reg_info):
                         logger.info("Copied application added to database.")
                         self.progress_bar.setValue(100)
-                        self.update_status(translator.get_text("Application added to library successfully!")) # New success message
+                        self.update_status(translator.get_text("Application added to library successfully!"), is_success=True)
                     else:
                         logger.error("Failed to add copied application to database.")
                         integration.unregister_appimage_integration(created_bin_link, created_desktop_file)
@@ -456,80 +469,291 @@ class InstallPage(QWidget):
                 raise RuntimeError(translator.get_text("Failed to extract AppImage."))
             self.progress_bar.setValue(40)
 
-            # 4. Install Files & Create Symlinks
+            # Default success value for all installation types
             success = False
-            if installer.requires_root:
-                self.update_status(translator.get_text("Root privileges required. Requesting password..."))
-                # QApplication.processEvents()
-                commands = installer.get_install_commands()
-                if not commands:
-                     raise RuntimeError(translator.get_text("Failed to generate installation commands for root execution."))
-                
-                logger.debug(f"Executing commands with sudo: {commands}")
-                # Execute commands with sudo helper
-                success, output = sudo_helper.execute_commands_with_sudo(commands)
-                if not success:
-                    logger.error(f"Sudo command execution failed. Output: {output}")
-                    raise RuntimeError(translator.get_text("Installation failed during command execution (requires root). Check logs for details."))
-                else:
-                     logger.info("Sudo commands executed successfully.")
-                     self.progress_bar.setValue(80)
 
-            else: # Non-root installation
-                self.update_status(translator.get_text("Copying application files..."))
-                # QApplication.processEvents()
-                if not installer.install_files():
-                     raise RuntimeError(translator.get_text("Failed to copy application files."))
-                self.progress_bar.setValue(60)
+            # System Install
+            if self.system_mode_radio.isChecked():
+                logger.info("Starting root installation...")
+                self.update_status(translator.get_text("Starting root installation..."))
+
+                root_commands = []
+                bin_link_target = installer.bin_symlink_target
+                install_dir = installer.app_install_dir
+                source_dir = installer.extract_dir # The temp dir where extraction happened
+                desktop_link_dir = installer.desktop_link_dir
+                # Get the CALCULATED final path *within* the install dir (source for link)
+                final_installed_exec_path = installer.final_executable_path
+                # Get the CALCULATED final desktop path *within* the install dir (source for link)
+                desktop_source_in_install_dir = installer.final_desktop_path
+
+                if not install_dir:
+                    logger.error("System install failed: Target installation directory not determined.")
+                    self.update_status(translator.get_text("Error: Target directory unknown."), error=True)
+                    return
+                if not source_dir or not os.path.isdir(source_dir):
+                    logger.error("System install failed: Temporary source directory invalid.")
+                    self.update_status(translator.get_text("Error: Extraction source invalid."), error=True)
+                    return
+
+                # 1. Ensure base installation directory exists
+                root_commands.append(["mkdir", "-p", os.path.dirname(install_dir)])
+                # 2. Ensure target installation directory is clean (or exists)
+                root_commands.append(["mkdir", "-p", install_dir]) # Ensure it exists first
+                # 3. Copy files from temp extraction dir to final install dir
+                # Use rsync -ah --delete? No, --delete might remove unrelated files if dir reused.
+                # Safer: remove target dir first if exists, then mkdir, then rsync
+                # Even safer: Use rsync -ah with trailing slashes for content sync
+                root_commands.append(["rsync", "-ah", "--delete", source_dir + "/", install_dir + "/"])
+
+                # 4. Create Binary Symlink
+                target_bin_link_path = None
+                if bin_link_target and final_installed_exec_path:
+                    target_bin_link_path = bin_link_target # Already determined by installer
+                    root_commands.append(["mkdir", "-p", os.path.dirname(target_bin_link_path)])
+                    root_commands.append(["rm", "-f", target_bin_link_path])
+                    
+                    # Make sure the target file is executable
+                    root_commands.append(["chmod", "+x", final_installed_exec_path])
+                    
+                    # Check if we need to create a wrapper script that handles AppImage environment setup
+                    # First check if AppRun exists and if we should use its environment setup
+                    apprun_path = os.path.join(installer.app_install_dir, "AppRun")
+                    
+                    if os.path.exists(apprun_path):
+                        # Create a wrapper script that uses AppRun's environment setup but directly calls the executable
+                        # This preserves the AppImage's environment configuration while making it accessible from PATH
+                        wrapper_content = f"""#!/bin/bash
+# Wrapper script for {installer.app_info.get('name', 'AppImage')}
+# This script maintains the AppImage environment but makes it accessible from PATH
+
+# Use the AppImage's directory for consistency
+cd "{installer.app_install_dir}"
+
+# Set environment variables from AppRun if possible
+if [ -f "{apprun_path}" ]; then
+    # Source the environment setup functions without executing AppRun itself
+    # This is done by creating a temporary script that extracts the environment setup
+    TEMP_ENV_SCRIPT=$(mktemp)
+    grep -v "^exec " "{apprun_path}" > "$TEMP_ENV_SCRIPT"
+    # Add a statement to export all variables to the environment
+    echo 'export PATH LD_LIBRARY_PATH MAGICK_HOME GS_LIB GS_FONTPATH GS_OPTIONS QT_PLUGIN_PATH XDG_DATA_DIRS QT_QPA_PLATFORM_PLUGIN_PATH' >> "$TEMP_ENV_SCRIPT"
+    # Source the environment script
+    source "$TEMP_ENV_SCRIPT"
+    rm -f "$TEMP_ENV_SCRIPT"
+fi
+
+# Execute the actual binary with all arguments
+exec "{final_installed_exec_path}" "$@"
+"""
+                    else:
+                        # Simpler wrapper when AppRun isn't available or for simpler AppImages
+                        wrapper_content = f"""#!/bin/bash
+# Wrapper script for {installer.app_info.get('name', 'AppImage')}
+export DESKTOPINTEGRATION=1
+exec "{final_installed_exec_path}" "$@"
+"""
+                    
+                    # Create wrapper in temp directory first
+                    temp_dir = tempfile.mkdtemp(prefix="aim_wrapper_")
+                    self.temp_dirs.append(temp_dir)  # Store for cleanup
+                    temp_wrapper_path = os.path.join(temp_dir, f"{os.path.basename(target_bin_link_path)}.wrapper")
+                    with open(temp_wrapper_path, 'w') as f:
+                        f.write(wrapper_content)
+                    
+                    # Then create command to move it to the target location with root privileges
+                    # Use cp instead of cat with redirection which doesn't work in subprocess
+                    root_commands.append(["cp", temp_wrapper_path, target_bin_link_path])
+                    root_commands.append(["chmod", "+x", target_bin_link_path])
+                else:
+                    logger.warning("Binary symlink target or source path not determined, skipping binary link creation.")
+
+                # 5. Create Desktop File Symlink
+                target_desktop_link_path = None
+                if desktop_link_dir and installer.app_info.get('name_sanitized'):
+                    # Create desktop filename using the sanitized name
+                    desktop_link_filename = f"appimagekit_{installer.app_info['name_sanitized']}.desktop"
+                    target_desktop_link_path = os.path.join(desktop_link_dir, desktop_link_filename)
+
+                    # Ensure destination directory exists
+                    root_commands.append(["mkdir", "-p", desktop_link_dir])
+                    root_commands.append(["rm", "-f", target_desktop_link_path])
+                    
+                    # Try to locate desktop file in extract dir
+                    extract_desktop = None
+                    if hasattr(installer, 'extract_dir') and installer.extract_dir and os.path.isdir(installer.extract_dir):
+                        # Look recursively for desktop files in extract_dir
+                        for root, _, files in os.walk(installer.extract_dir):
+                            for file in files:
+                                if file.endswith(".desktop"):
+                                    extract_desktop = os.path.join(root, file)
+                                    logger.debug(f"Found desktop file: {extract_desktop}")
+                                    break
+                            if extract_desktop:
+                                break
+                                
+                    if extract_desktop:
+                        # Copy the desktop file to target
+                        root_commands.append(["cp", extract_desktop, target_desktop_link_path])
+                        
+                        # Update Exec and Icon entries in the desktop file
+                        if bin_link_target:
+                            root_commands.append(["sed", "-i", f"s|^Exec=.*|Exec={bin_link_target} %U|g", target_desktop_link_path])
+                        
+                        # Set icon name and copy icon files if available
+                        icon_name = installer.app_info.get('icon_name')
+                        if icon_name:
+                            # Set the icon name in desktop file
+                            root_commands.append(["sed", "-i", f's|^Icon=.*|Icon={icon_name}|g', target_desktop_link_path])
+                            
+                            # Try to find icon files for system-wide installation
+                            if hasattr(installer, 'extract_dir') and installer.extract_dir:
+                                # Common icon locations in AppImage structure
+                                icon_locations = [
+                                    # Root .DirIcon (common in AppImages)
+                                    os.path.join(installer.extract_dir, ".DirIcon"),
+                                    # Icon with exact name (common for desktop integration)
+                                    os.path.join(installer.extract_dir, f"{icon_name}.png"),
+                                    # Standard XDG locations
+                                    os.path.join(installer.extract_dir, "usr/share/icons/hicolor/128x128/apps", f"{icon_name}.png"),
+                                    os.path.join(installer.extract_dir, "usr/share/icons/hicolor/256x256/apps", f"{icon_name}.png"),
+                                    os.path.join(installer.extract_dir, "usr/share/icons/hicolor/scalable/apps", f"{icon_name}.svg")
+                                ]
+                                
+                                # Check all potential icon locations
+                                for icon_path in icon_locations:
+                                    if os.path.exists(icon_path) and os.path.isfile(icon_path):
+                                        # Create system-wide icon directories if needed
+                                        if icon_path.endswith(".svg"):
+                                            # SVG goes to scalable directory
+                                            icon_install_dir = "/usr/share/icons/hicolor/scalable/apps"
+                                            root_commands.append(["mkdir", "-p", icon_install_dir])
+                                            root_commands.append(["cp", icon_path, os.path.join(icon_install_dir, f"{icon_name}.svg")])
+                                        else:
+                                            # PNG goes to appropriate size directory
+                                            # Default to 128x128 for unknown sizes
+                                            icon_install_dir = "/usr/share/icons/hicolor/128x128/apps"
+                                            root_commands.append(["mkdir", "-p", icon_install_dir])
+                                            root_commands.append(["cp", icon_path, os.path.join(icon_install_dir, f"{icon_name}.png")])
+                                        
+                                        # Update icon cache
+                                        root_commands.append(["gtk-update-icon-cache", "-f", "-t", "/usr/share/icons/hicolor"])
+                                        break
+                        
+                        # Update desktop database
+                        root_commands.append(["update-desktop-database", desktop_link_dir])
+                        
+                        # Store the final path for database registration
+                        installer.final_copied_desktop_path = target_desktop_link_path
+                    else:
+                        logger.warning("No desktop file found in extracted directory")
+                else:
+                    logger.warning("Desktop file integration skipped: Missing target directory or sanitized name")
+
+                self.update_status(translator.get_text("Executing installation steps with root privileges..."))
+                QApplication.processEvents() # Update UI
                 
-                self.update_status(translator.get_text("Creating system integration (symlinks)..."))
-                # QApplication.processEvents()
-                if not installer.create_symlinks():
-                    # Treat symlink failure as critical error
-                    logger.error("Failed to create system integration links.")
-                    raise RuntimeError(translator.get_text("Failed to create system integration links."))
-                self.progress_bar.setValue(80)
-                success = True # Assume success if file copy worked, symlinks are bonus
-            
+                # Use the batch script helper to run all commands at once (requires only one sudo password)
+                pkexec_success, pkexec_output = sudo_helper.run_commands_with_pkexec_script(root_commands)
+                if not pkexec_success:
+                    error_msg = translator.get_text("Root installation failed:") + f"\nOutput: {pkexec_output}"
+                    logger.error(error_msg)
+                    self.update_status(error_msg, is_error=True)
+                    success = False
+                else:
+                    success = True
+                    logger.info("Root installation commands completed successfully.")
+                    if target_desktop_link_path:
+                        # Make sure the desktop file path is set in installer object for database
+                        logger.debug(f"Setting final_copied_desktop_path to {target_desktop_link_path}")
+                        installer.final_copied_desktop_path = target_desktop_link_path
+
+            # User or Custom Install (both use installer.install_files() and non-root approach)
+            elif self.user_mode_radio.isChecked() or self.custom_mode_radio.isChecked():
+                mode_name = "user" if self.user_mode_radio.isChecked() else "custom"
+                logger.info(f"Starting {mode_name} installation...")
+                self.update_status(translator.get_text(f"Starting {mode_name} installation..."))
+                
+                # Perform non-root installation
+                if installer.install_files():
+                    logger.info(f"Files copied successfully for {mode_name} installation.")
+                    self.progress_bar.setValue(60)
+                    
+                    # Create symlinks (desktop integration)
+                    self.update_status(translator.get_text("Creating shortcuts..."))
+                    if installer.create_symlinks():
+                        logger.info(f"Symlinks created successfully for {mode_name} installation.")
+                        self.progress_bar.setValue(80)
+                        success = True
+                        # Store desktop file path for database
+                        if hasattr(installer, 'final_copied_desktop_path'):
+                            target_desktop_link_path = installer.final_copied_desktop_path
+                    else:
+                        logger.error(f"Failed to create symlinks for {mode_name} installation.")
+                        self.update_status(translator.get_text("Error: Failed to create shortcuts."), error=True)
+                        # Installation partially succeeded, but integration failed
+                        success = False
+                else:
+                    logger.error(f"Failed to copy files for {mode_name} installation.")
+                    self.update_status(translator.get_text("Error: Failed to copy AppImage files."), error=True)
+                    success = False
+
             # 5. Add to Database (if successful)
             if success:
-                self.update_status(translator.get_text("Registering application..."))
-                # QApplication.processEvents()
-                app_info = installer.get_installation_info()
-                # IMPORTANT: Explicitly set management type for installed apps
-                app_info["management_type"] = config.MGMT_TYPE_INSTALLED 
-                try:
-                    db = DBManager()
-                    if db.add_app(app_info):
-                        logger.info(f"Application '{app_info.get('name')}' added to database.")
-                        self.progress_bar.setValue(95)
+                # Update DB with installation info
+                # For root installation, restore the desktop path handling
+                if self.system_mode_radio.isChecked() and 'target_desktop_link_path' in locals():
+                    installer.final_copied_desktop_path = target_desktop_link_path
+                installation_data = installer.get_installation_info()
+                if installation_data:
+                    db_success = self.db_manager.add_app(installation_data)
+                    if db_success:
+                        logger.info(f"Application '{installer.app_info.get('name')}' added to database.")
+                        self.update_status(translator.get_text("Installation complete and registered."), is_success=True)
+                        self.progress_bar.setValue(100)
+                        # Navigate to manage page using the direct main_window reference
+                        try:
+                            if self.main_window and hasattr(self.main_window, 'select_sidebar_item_by_index'):
+                                self.main_window.select_sidebar_item_by_index(1) 
+                            else:
+                                logger.warning("Could not navigate: main_window reference or method missing.")
+                        except Exception as nav_e: # Catch any unexpected error during navigation
+                            logger.error(f"Error navigating to Manage page: {nav_e}", exc_info=True)
                     else:
-                        logger.error("Failed to add application to database.")
-                        # Don't fail the whole install, but warn
-                        self.update_status(translator.get_text("Installation completed, but failed to register in database."), warning=True)
-                except Exception as db_err:
-                     logger.error(f"Database error after installation: {db_err}")
-                     self.update_status(translator.get_text("Installation completed, but database error occurred."), warning=True)
-
-                self.progress_bar.setValue(100)
-                self.update_status(translator.get_text("Installation successful!"))
-            else:
-                 # Should have been caught by exceptions earlier, but as a fallback
-                 raise RuntimeError(translator.get_text("Installation failed for an unknown reason."))
+                        logger.error("Installation completed, but failed to register in database.")
+                        self.update_status(translator.get_text("Installation finished, but DB registration failed."), is_error=True)
+                else:
+                     logger.error("Could not retrieve installation info after successful installation steps.")
+                     self.update_status(translator.get_text("Installation steps succeeded, but failed to get info for DB."), is_error=True)
+            elif installer.requires_root: # Only show this if root install failed
+                 logger.error("Root installation failed, not adding to database.")
+                 # Status already updated in the loop on failure
+            else: # User/Custom mode install failed earlier
+                 logger.error(f"{install_mode} installation failed, not adding to database.")
+                 # Status should have been updated in the install blocks
 
         except Exception as e:
             logger.error(f"Installation failed: {e}", exc_info=True)
-            self.update_status(f"{translator.get_text('Installation failed')}: {e}", error=True)
-            self.progress_bar.setValue(0) # Reset progress on error
+            self.update_status(f"{translator.get_text('Installation failed:')} {e}", is_error=True)
         finally:
-            # 6. Cleanup (always attempt)
-            if installer: # Check if installer object was created
-                 logger.info("Performing cleanup...")
-                 installer.cleanup()
-            # Re-enable UI elements after a short delay to let user see final status
-            QTimer.singleShot(1500, lambda: self.set_ui_installing(False))
-            # Re-enable buttons even on failure
-            # self.set_ui_installing(False)
+            self.progress_bar.setVisible(False)
+            self.install_button.setEnabled(True)
+            self.user_mode_radio.setEnabled(True)
+            self.system_mode_radio.setEnabled(True)
+            self.custom_mode_radio.setEnabled(True)
+            self.custom_path_input.setEnabled(True)
+            self.custom_path_button.setEnabled(True)
+            
+            # Clean up temporary directories
+            for temp_dir in self.temp_dirs:
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                        logger.debug(f"Removed temporary directory: {temp_dir}")
+                except Exception as e:
+                    logger.warning(f"Could not remove temporary directory {temp_dir}: {e}")
+            
+            # --- Script cleanup is no longer needed ---
 
     def set_ui_installing(self, installing):
          """Enable/disable UI elements during installation."""
@@ -543,17 +767,20 @@ class InstallPage(QWidget):
          self.progress_bar.setVisible(installing)
          self.status_label.setVisible(installing)
     
-    def update_status(self, message, error=False, warning=False):
+    def update_status(self, message, is_error=False, is_success=False, warning=False):
         """Updates the status label text and style."""
         self.status_label.setText(message)
-        if error:
-            self.status_label.setStyleSheet("color: red;")
+        style = "color: black;" # Default style
+        if is_error:             # Use is_error
+            style = "color: red;"
         elif warning:
-            self.status_label.setStyleSheet("color: orange;")
-        else:
-            self.status_label.setStyleSheet("color: black;")
+            style = "color: orange;" # Keep warning for now
+        elif is_success:         # Use is_success
+            style = "color: green;" # Add green for success
+        
+        self.status_label.setStyleSheet(style) # Apply the determined style
         self.status_label.setVisible(True)
-        # QApplication.processEvents() # Ensure status update is visible
+        QApplication.processEvents() # Ensure status update is visible (moved here)
 
     def set_file_path(self, file_path):
         """Sets the file path and processes the file - used for drag and drop"""

@@ -60,12 +60,18 @@ def sanitize_name(name):
     try:
         # Convert to lowercase
         name = name.lower()
+        
+        # Pre-check if the name is already clean and simple (only letters, no spaces or special chars)
+        if re.match(r'^[a-z0-9]+$', name):
+            # Name is already clean and simple, return as is
+            return name
+            
         # Remove version numbers or similar patterns (e.g., -1.2.3, _v2)
         name = re.sub(r'[-_ ]?v?[0-9]+(\.[0-9]+)*([-_].*)?$', '', name)
         # Replace spaces and common separators with underscore
-        name = re.sub(r'[\\s/:]+', '_', name)
+        name = re.sub(r'[\s/:]+', '_', name)
         # Remove characters not suitable for filenames (allow letters, numbers, underscore, hyphen, dot)
-        name = re.sub(r'[^a-zA-Z0-9_\\-\\.]', '', name)
+        name = re.sub(r'[^a-z0-9_\-\.]', '', name)
         # Remove leading/trailing underscores/hyphens/dots
         name = name.strip('_-.')
         # Ensure name is not empty after sanitization
@@ -73,11 +79,15 @@ def sanitize_name(name):
             logger.warning("Sanitization resulted in an empty name.")
             # Fallback to a generic name or raise an error?
             return "sanitized_app"
+        
+        # Fix names with multiple consecutive underscores
+        name = re.sub(r'_+', '_', name)
+        
         return name
     except Exception as e:
         logger.error(f"Error sanitizing name '{name}': {e}")
         # Fallback in case of unexpected error
-        return "sanitization_error" 
+        return "sanitization_error"
 
 
 # --- System Checks ---

@@ -265,6 +265,9 @@ class MainWindow(QMainWindow):
             self.dark_mode = config.get_setting("dark_mode", False)
             logger.info(f"Using theme: {'Dark' if self.dark_mode else 'Light'}")
             
+            # --->>> Initialize DBManager early <<<---
+            self.db_manager = db_manager.DBManager()
+
             # Apply the stylesheet
             self.update_theme()
             
@@ -370,7 +373,7 @@ class MainWindow(QMainWindow):
         # install_label.setStyleSheet("color: black;") # Set text color explicitly
         # install_layout.addWidget(install_label)
         # self.install_page.setLayout(install_layout)
-        self.install_page = InstallPage(self) # Use the new InstallPage widget
+        self.install_page = InstallPage(self, db_manager=self.db_manager, main_window=self) # <-- Pass self as main_window
         
         # self.manage_page = QWidget() # Remove old placeholder
         # manage_layout = QVBoxLayout()

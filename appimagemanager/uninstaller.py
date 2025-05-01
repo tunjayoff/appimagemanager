@@ -144,19 +144,19 @@ class AppImageUninstaller:
         icon_name = self.app_info.get("icon_name")
         
         if install_path and any(install_path.startswith(p) for p in ["/opt", "/usr/local", "/etc"]):
-            commands.append(f"rm -rf \"{install_path}\"")
+            commands.append(["rm", "-rf", install_path])
         elif install_path:
              logger.warning(f"Install path '{install_path}' does not seem like a system path, skipping rm command for root uninstall.")
 
         if exec_symlink and any(exec_symlink.startswith(p) for p in ["/usr/local/bin", "/usr/bin", "/bin", "/opt/bin"]):
-            commands.append(f"rm -f \"{exec_symlink}\"")
+            commands.append(["rm", "-f", exec_symlink])
         elif exec_symlink:
              logger.warning(f"Executable symlink '{exec_symlink}' does not seem like a system path, skipping rm command for root uninstall.")
              
         if desktop_file_path and any(desktop_file_path.startswith(p) for p in ["/usr/local/share/applications", "/usr/share/applications"]):
-             commands.append(f"rm -f \"{desktop_file_path}\"")
+             commands.append(["rm", "-f", desktop_file_path])
              desktop_dir = os.path.dirname(desktop_file_path)
-             commands.append(f"update-desktop-database \"{desktop_dir}\" || true") 
+             commands.append(["update-desktop-database", desktop_dir, "||", "true"])
         elif desktop_file_path:
              logger.warning(f"Desktop file path '{desktop_file_path}' does not seem like a system path, skipping rm command for root uninstall.")
 
@@ -167,8 +167,8 @@ class AppImageUninstaller:
              for size in icon_sizes:
                  for ext in icon_exts:
                      potential_icon_path = os.path.join(system_icon_base_dir, size, "apps", f"{icon_name}{ext}")
-                     commands.append(f"rm -f \"{potential_icon_path}\"")
-             commands.append(f"gtk-update-icon-cache -f -t \"{system_icon_base_dir}\" || true") 
+                     commands.append(["rm", "-f", potential_icon_path])
+             commands.append(["gtk-update-icon-cache", "-f", "-t", system_icon_base_dir, "||", "true"])
         else:
              logger.warning("Cannot generate system icon removal commands: Icon name missing.")
              

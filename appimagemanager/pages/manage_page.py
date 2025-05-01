@@ -508,7 +508,7 @@ class ManagePage(QWidget):
                              logger.debug(f"Executing uninstall commands with sudo: {commands}")
                              # Make sure sudo_helper is imported and works
                              try:
-                                 sudo_success, output = sudo_helper.execute_commands_with_sudo(commands)
+                                 sudo_success, output = sudo_helper.run_commands_with_pkexec_script(commands)
                                  if sudo_success:
                                      logger.info("Sudo uninstall commands executed successfully.")
                                      files_removed_successfully = True
