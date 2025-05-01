@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QWidget, QLabel, QListWidget, QStackedWidget, 
                              QListWidgetItem, QMessageBox, QToolButton, QSizePolicy, QToolBar)
 from PyQt6.QtGui import QIcon, QAction, QFont, QPixmap, QDrag, QDragEnterEvent, QDropEvent, QPainter, QColor
-from PyQt6.QtCore import Qt, QSize, QUrl, QPropertyAnimation, QRect # QRect'i ekledim
+from PyQt6.QtCore import Qt, QSize, QUrl, QPropertyAnimation, QRect
 
 # Import application modules
 from . import config, utils
@@ -296,26 +296,24 @@ class MainWindow(QMainWindow):
             # --- Create Pages and Sidebar Items ---
             self.create_pages()
             self.populate_sidebar()
-
-            # Connect sidebar selection changes to content area
             self.sidebar.currentItemChanged.connect(self.change_page)
-
-            # --- Initialize other components ---
             self.create_menus()
             self.create_status_bar()
 
-            # --- Load user language preference ---
-            saved_language = config.get_setting("language", config.DEFAULT_LANGUAGE)
-            self.translator.set_language(saved_language)
-            logger.info(f"Using language: {saved_language}")
-            # Update all UI texts to the selected language
-            self.update_ui_texts()
-            # --- Initial Checks ---
-            self.perform_initial_checks()
+            # Set initial page (e.g., Install)
+            self.sidebar.setCurrentRow(0)
             
-            # --- Apply theme again AFTER all widgets are created ---
-            # Ensures toolbar button gets themed correctly on startup
+            # Apply initial theme
             self.update_theme()
+
+            # Initial system checks
+            self.perform_initial_checks()
+
+            # --->>> Ensure initial translation application <<<---
+            self.update_ui_texts()
+
+            # Set window geometry (optional, after everything is set up)
+            self.setGeometry(100, 100, config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
             
             logger.info(_("Application started successfully."))
         except Exception as e:
@@ -537,12 +535,16 @@ QMenu::item:selected {{
              return
 
         # Check system compatibility (optional display)
-        compatibility = appimage_utils.check_system_compatibility()
-        if not compatibility.get("libfuse_installed"):
-             logger.warning(_("libFUSE package ({pkg}) might be missing. AppImage execution may fail.").format(pkg=config.LIBFUSE_PACKAGE))
-             # Optionally show a non-critical warning to the user
+        # compatibility = appimage_utils.check_system_compatibility() # OLD CALL
+        libfuse_found = utils.check_libfuse() # NEW CALL
+        if not libfuse_found:
+             # logger.warning(_("libFUSE package ({pkg}) might be missing. AppImage execution may fail.").format(pkg=config.LIBFUSE_PACKAGE))
+             # Log mesajı zaten utils.check_libfuse içinde yapılıyor, burada tekrara gerek yok.
+             # Sadece kullanıcıya bir uyarı göstermek istiyorsak aşağıdaki satırları açabiliriz.
+             pass # No direct user warning for now, just logged in utils.
+             # Optional: Show non-critical warning to the user
              # QMessageBox.warning(self, _("Compatibility Warning"), 
-             #                    _("libFUSE package ({pkg}) might be missing. This is often required to run AppImages.").format(pkg=config.LIBFUSE_PACKAGE))
+             #                    _("libFUSE package might be missing. This is often required to run AppImages."))
 
         logger.info(_("Initial checks completed."))
         
@@ -756,7 +758,7 @@ QMenu::item:selected {{
         # Update status bar
         self.statusBar().showMessage(self.translator.get_text("status_ready"))
         
-        # Force update the content pages
+        # --->>> Restore explicit retranslate calls for pages <<<---
         if hasattr(self, 'install_page') and hasattr(self.install_page, 'retranslateUi'):
             self.install_page.retranslateUi()
         
@@ -766,7 +768,6 @@ QMenu::item:selected {{
         if hasattr(self, 'settings_page') and hasattr(self.settings_page, 'retranslateUi'):
             self.settings_page.retranslateUi()
         
-        # Update about page texts
         if hasattr(self, 'about_page') and hasattr(self.about_page, 'retranslateUi'):
             self.about_page.retranslateUi()
         

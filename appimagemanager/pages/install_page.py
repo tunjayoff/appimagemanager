@@ -9,16 +9,21 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdi
                              QToolButton, QMenu, QListWidget, QListWidgetItem)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QEvent, QCoreApplication
 import os
-from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+from PyQt6.QtGui import QIcon, QAction, QPixmap
+# from PyQt6.QtWidgets import QGraphicsDropShadowEffect # Unused import
+import uuid
+import datetime
+import shutil
 
 from .. import config
 # from i18n import _ # Remove this import
 from ..i18n import get_translator # Import the getter function
-from ..appimage_utils import AppImageInstaller # ADD THIS IMPORT
+from ..utils import sanitize_name # <-- Import from utils
 from ..db_manager import DBManager # ADD THIS IMPORT
 from .. import sudo_helper # ADD THIS IMPORT
-from .. import appimage_utils # Make sure this is imported
+# from .. import appimage_utils # This might not be needed anymore if sanitize_name moved
+from .. import integration # <-- ADD THIS IMPORT
+from ..installer import AppImageInstaller # Import from the new installer module
 
 # Get the translator instance
 translator = get_translator()
@@ -73,12 +78,23 @@ class InstallPage(QWidget):
         info_layout.setSpacing(10) # Spacing between rows
         self.app_name_label = QLabel("-") # Label text set by addRow
         self.app_version_label = QLabel("-") # Label text set by addRow
-        self.app_icon_label = QLabel() # TODO: Add icon display later
+        self.app_icon_label = QLabel() # Label for the icon
+        self.app_icon_label.setMinimumSize(64, 64) # Give it a reasonable minimum size
+        self.app_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.app_icon_label.setStyleSheet("border: 1px solid #ccc; border-radius: 5px; background-color: #f0f0f0;") # Basic styling
         # Add more labels as needed (description, etc.)
         
+        # Add icon label to the form layout
+        icon_layout = QHBoxLayout()
+        icon_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+        icon_layout.addWidget(self.app_icon_label)
+        icon_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
+        info_layout.addRow(translator.get_text("Icon:"), icon_layout) # Add icon row
+        
+        # Ensure correct labels are used
         info_layout.addRow(translator.get_text("Name:"), self.app_name_label)
         info_layout.addRow(translator.get_text("Version:"), self.app_version_label)
-        # info_layout.addWidget(self.app_icon_label) # Add icon later
+        
         self.info_group.setLayout(info_layout)
         self.info_group.setVisible(False) # Initially hidden until file selected
         main_layout.addWidget(self.info_group)
@@ -95,7 +111,7 @@ class InstallPage(QWidget):
         self.user_mode_radio = QRadioButton(translator.get_text("install_mode_user"))
         self.system_mode_radio = QRadioButton(translator.get_text("install_mode_system"))
         self.custom_mode_radio = QRadioButton(translator.get_text("install_mode_custom"))
-        self.register_only_radio = QRadioButton(translator.get_text("manage_mode_register"))
+        self.add_to_library_radio = QRadioButton(translator.get_text("install_mode_add_to_library"))
         
         # Determine default check state based on config (or default to user)
         default_mode = config.get_setting("default_install_mode", "user")
@@ -107,12 +123,12 @@ class InstallPage(QWidget):
         if default_mode == config.MGMT_TYPE_REGISTERED:
             self.user_mode_radio.setChecked(True)
         else:
-            self.register_only_radio.setChecked(False) # Explicitly uncheck
+            self.add_to_library_radio.setChecked(False) # Explicitly uncheck
 
         mode_layout.addWidget(self.user_mode_radio)
         mode_layout.addWidget(self.system_mode_radio)
         mode_layout.addWidget(self.custom_mode_radio)
-        mode_layout.addWidget(self.register_only_radio)
+        mode_layout.addWidget(self.add_to_library_radio)
         options_layout.addLayout(mode_layout)
         
         # Custom Path (Initially hidden)
@@ -137,7 +153,7 @@ class InstallPage(QWidget):
         self.user_mode_radio.toggled.connect(self.toggle_custom_path)
         self.system_mode_radio.toggled.connect(self.toggle_custom_path)
         self.custom_mode_radio.toggled.connect(self.toggle_custom_path)
-        self.register_only_radio.toggled.connect(self.toggle_custom_path)
+        self.add_to_library_radio.toggled.connect(self.toggle_custom_path)
         self.custom_path_button.clicked.connect(self.select_custom_path)
 
         self.options_group.setLayout(options_layout)
@@ -191,33 +207,71 @@ class InstallPage(QWidget):
 
     def process_selected_file(self, file_path):
         """Extracts info from the selected AppImage and updates the UI."""
+        # Clear previous info and icon
+        self.app_name_label.setText("-")
+        self.app_version_label.setText("-")
+        self.app_icon_label.clear()
+        self.app_icon_label.setText(translator.get_text("Loading...")) 
+        self.install_button.setEnabled(False) # Disable install button initially
+        self.info_group.setVisible(True) # Keep info group visible
+        self.options_group.setVisible(False) # Hide options until metadata read
+        
+        temp_installer = None # Define outside try for cleanup
         try:
-            # Create a temporary installer instance just to read initial metadata
-            # We don't need a specific install_mode just for this.
+            # Create a temporary installer instance
             temp_installer = AppImageInstaller(file_path)
-            app_info = temp_installer.app_info
             
-            app_name = app_info.get("name", os.path.basename(file_path).replace(".AppImage", ""))
-            app_version = app_info.get("version", translator.get_text("Unknown"))
-            
-            self.app_name_label.setText(app_name) 
-            self.app_version_label.setText(app_version)
-            logger.info(f"Extracted initial info: Name='{app_name}', Version='{app_version}'")
-            # TODO: Add icon extraction/display if possible without full extract later
-            
-            # Enable install button now that we have basic info
-            self.install_button.setEnabled(True)
-            self.info_group.setVisible(True)
-            self.options_group.setVisible(True)
+            # --- Read Metadata --- 
+            if temp_installer.read_metadata():
+                 # Metadata read successfully
+                 app_info = temp_installer.app_info
+                 app_name = app_info.get("name", "Unknown") # Use Unknown as fallback here too
+                 app_version = app_info.get("version", "Unknown")
+                 self.app_name_label.setText(app_name) 
+                 self.app_version_label.setText(app_version)
+                 logger.info(f"Successfully read metadata: Name='{app_name}', Version='{app_version}'")
+                 self.options_group.setVisible(True) # Show options
+                 self.install_button.setEnabled(True) # Enable install
+                 
+                 # --- Try to extract and display icon --- 
+                 icon_path = temp_installer.temp_preview_icon_path # Use the path prepared by read_metadata
+                 if icon_path:
+                     pixmap = QPixmap(icon_path)
+                     if not pixmap.isNull():
+                         scaled_pixmap = pixmap.scaled(self.app_icon_label.size(), 
+                                                       Qt.AspectRatioMode.KeepAspectRatio, 
+                                                       Qt.TransformationMode.SmoothTransformation)
+                         self.app_icon_label.setPixmap(scaled_pixmap)
+                         logger.info(f"Displayed icon from: {icon_path}")
+                     else:
+                         logger.warning(f"Failed to load QPixmap from extracted icon: {icon_path}")
+                         self.app_icon_label.setText(translator.get_text("No Icon"))
+                 else:
+                      logger.info("No icon could be extracted for display.")
+                      self.app_icon_label.setText(translator.get_text("No Icon"))
+            else:
+                 # read_metadata failed (error logged within method), show error state
+                 logger.error("read_metadata failed, showing error in UI.")
+                 self.app_name_label.setText(translator.get_text("Error"))
+                 self.app_version_label.setText(translator.get_text("Could not read metadata"))
+                 self.app_icon_label.setText(translator.get_text("Error"))
+                 # Keep install button disabled
 
+        except FileNotFoundError as e: # Catch specific error from __init__
+            logger.error(f"Error creating AppImageInstaller: {e}")
+            self.app_name_label.setText(translator.get_text("Error"))
+            self.app_version_label.setText(f"{translator.get_text('File Error')}: {e}") # Show file error
+            self.app_icon_label.setText(translator.get_text("Error"))
         except Exception as e:
-            logger.error(f"Error processing selected file '{file_path}': {e}")
-            # Update UI to show error
+            logger.error(f"Error processing selected file '{file_path}': {e}", exc_info=True)
+            # General error update
             self.app_name_label.setText(translator.get_text("Error"))
             self.app_version_label.setText(translator.get_text("Could not read metadata"))
-            self.install_button.setEnabled(False)
-            self.info_group.setVisible(True) # Show info group even on error to display message
-            self.options_group.setVisible(False)
+            self.app_icon_label.setText(translator.get_text("Error"))
+        finally:
+             # Cleanup temporary files created by this instance
+             if temp_installer:
+                  temp_installer.cleanup()
 
     def toggle_custom_path(self):
         """Shows/hides the custom path input based on radio button selection."""
@@ -246,48 +300,128 @@ class InstallPage(QWidget):
         install_mode = "user" # Default install mode if installed type
         custom_path = None
         
-        if self.register_only_radio.isChecked():
+        # Check if Add to Library (Copy) mode is selected
+        if self.add_to_library_radio.isChecked():
+            # Keep management type as registered internally for now
             management_type = config.MGMT_TYPE_REGISTERED
-            logger.info(f"Starting registration for '{appimage_path}'")
+            logger.info(f"Starting Add to Library process for '{appimage_path}'")
             self.set_ui_installing(True)
-            self.update_status(translator.get_text("Registering application..."))
-            self.progress_bar.setRange(0, 0) # Indeterminate for registration
-            self.progress_bar.setValue(-1) # Show busy indicator
+            self.update_status(translator.get_text("Adding AppImage to library..."))
+            self.progress_bar.setRange(0, 100) # Use progress for copy
+            self.progress_bar.setValue(5)
             
+            created_bin_link = None
+            created_desktop_file = None
+            copied_appimage_path = None # Path to the *copied* file
+            temp_installer = None # For metadata reading
             try:
-                # Call the register_appimage function
-                reg_info = appimage_utils.register_appimage(appimage_path)
-                if reg_info:
-                    logger.info(f"Registration info created: {reg_info.get('name')}")
-                    # Add to database
-                    try:
-                        db = DBManager()
-                        if db.add_app(reg_info):
-                            logger.info("Registered application added to database.")
-                            self.update_status(translator.get_text("Registration successful!"))
-                        else:
-                            logger.error("Failed to add registered application to database.")
-                            # Attempt to clean up artifacts if DB add failed
-                            appimage_utils.remove_registered_app_artifacts(reg_info)
-                            raise RuntimeError(translator.get_text("Failed to register in database."))
-                    except Exception as db_err:
-                        logger.error(f"Database error during registration: {db_err}")
-                        # Attempt to clean up artifacts if DB add failed
-                        appimage_utils.remove_registered_app_artifacts(reg_info)
-                        raise RuntimeError(f"{translator.get_text('Database error')}: {db_err}")
-                else:
-                    raise RuntimeError(translator.get_text("Failed to process AppImage for registration."))
+                # 1. Ensure managed directory exists
+                managed_dir = config.MANAGED_APPIMAGES_DIR
+                logger.debug(f"Ensuring managed AppImage directory exists: {managed_dir}")
+                os.makedirs(managed_dir, exist_ok=True)
+                self.progress_bar.setValue(10)
+
+                # 2. Read metadata (using temporary installer) BEFORE copying
+                logger.debug("Reading metadata before copy...")
+                temp_installer = AppImageInstaller(appimage_path)
+                read_success, temp_icon_path = temp_installer.read_metadata()
+                if not read_success:
+                    raise RuntimeError(translator.get_text("Failed to read AppImage metadata."))
+                app_info = temp_installer.app_info
+                logger.debug("Metadata read successfully.")
+                self.progress_bar.setValue(25)
+                
+                # 3. Determine target filename (use original)
+                target_filename = os.path.basename(appimage_path)
+                copied_appimage_path = os.path.join(managed_dir, target_filename)
+                logger.debug(f"Target path for copied AppImage: {copied_appimage_path}")
+
+                # 4. Check for existing file (optional: overwrite or rename?)
+                if os.path.exists(copied_appimage_path):
+                    # Simple approach: Overwrite existing file
+                    logger.warning(f"AppImage already exists in library, overwriting: {copied_appimage_path}")
+                    # TODO: Add option to cancel or rename?
+                    try: 
+                         os.remove(copied_appimage_path)
+                    except OSError as rm_err:
+                         raise RuntimeError(f"Could not overwrite existing file in library: {rm_err}")
+                
+                # 5. Copy the AppImage file
+                self.update_status(translator.get_text("Copying AppImage to library..."))
+                logger.info(f"Copying {appimage_path} to {copied_appimage_path}")
+                # TODO: Implement progress reporting for large files
+                shutil.copy2(appimage_path, copied_appimage_path)
+                logger.info("AppImage copied successfully.")
+                self.progress_bar.setValue(75)
+
+                # 6. Call integration function using the COPIED path
+                self.update_status(translator.get_text("Creating shortcuts..."))
+                created_bin_link, created_desktop_file = integration.register_appimage_integration(
+                    copied_appimage_path, # Use the path to the copy!
+                    app_info, 
+                    temp_icon_path
+                )
+                
+                # Cleanup the temp installer AFTER integration call (icon needed)
+                if temp_installer: temp_installer.cleanup()
+
+                if not created_bin_link or not created_desktop_file:
+                     raise RuntimeError(translator.get_text("Failed to create integration files (link/desktop)."))
+                logger.info(f"Integration files created: Link={created_bin_link}, Desktop={created_desktop_file}")
+                self.progress_bar.setValue(90)
+                
+                # 7. Gather info for database (using COPIED path)
+                app_name_used = app_info.get('name') or os.path.basename(copied_appimage_path).replace('.AppImage','').replace('.appimage','')
+                icon_name_used = app_info.get('icon_name') or sanitize_name(app_name_used)
+                reg_info = {
+                    'id': str(uuid.uuid4()),
+                    'name': app_name_used,
+                    'version': app_info.get('version', 'N/A'),
+                    'install_path': copied_appimage_path, # Store path to the COPY
+                    'executable_path': copied_appimage_path, # Store path to the COPY
+                    'icon_name': icon_name_used,
+                    'management_type': config.MGMT_TYPE_REGISTERED, # Still use registered type
+                    'date_added': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'desktop_file_path': created_desktop_file,
+                    'executable_symlink': created_bin_link
+                }
+
+                # 8. Add to database
+                try:
+                    db = DBManager()
+                    if db.add_app(reg_info):
+                        logger.info("Copied application added to database.")
+                        self.progress_bar.setValue(100)
+                        self.update_status(translator.get_text("Application added to library successfully!")) # New success message
+                    else:
+                        logger.error("Failed to add copied application to database.")
+                        integration.unregister_appimage_integration(created_bin_link, created_desktop_file)
+                        if copied_appimage_path and os.path.exists(copied_appimage_path): os.remove(copied_appimage_path)
+                        raise RuntimeError(translator.get_text("Failed to register in database."))
+                except Exception as db_err:
+                    logger.error(f"Database error during library add: {db_err}")
+                    integration.unregister_appimage_integration(created_bin_link, created_desktop_file)
+                    if copied_appimage_path and os.path.exists(copied_appimage_path): os.remove(copied_appimage_path)
+                    raise RuntimeError(f"{translator.get_text('Database error')}: {db_err}")
                 
             except Exception as e:
-                logger.error(f"Registration failed: {e}", exc_info=True)
-                self.update_status(f"{translator.get_text('Registration failed')}: {e}", error=True)
-                self.progress_bar.setRange(0, 1) # Stop indeterminate
+                logger.error(f"Add to Library failed: {e}", exc_info=True)
+                # Attempt cleanup
+                if temp_installer: temp_installer.cleanup() # Ensure temp installer cleaned
+                integration.unregister_appimage_integration(created_bin_link, created_desktop_file)
+                if copied_appimage_path and os.path.exists(copied_appimage_path): 
+                    try: 
+                        os.remove(copied_appimage_path)
+                    except OSError: 
+                        logger.error(f"Failed cleanup: Could not remove copied file {copied_appimage_path}")
+                self.update_status(f"{translator.get_text('Add to Library failed')}: {e}", error=True) # New error message
+                self.progress_bar.setRange(0, 1) 
                 self.progress_bar.setValue(0)
             finally:
-                # Re-enable UI after a delay
+                if temp_installer: temp_installer.cleanup() # Extra cleanup just in case
                 QTimer.singleShot(1500, lambda: self.set_ui_installing(False))
             
-            return # Stop here for registration mode
+            return # Stop here for this mode
 
         # --- Installation Mode Logic (User, System, Custom) --- 
         elif self.system_mode_radio.isChecked():
@@ -312,17 +446,7 @@ class InstallPage(QWidget):
             installer = AppImageInstaller(appimage_path, install_mode, custom_path)
             self.progress_bar.setValue(10)
 
-            # 2. Prerequisite Check (Example - enhance later)
-            prereqs = installer.check_prerequisites()
-            if not prereqs.get("appimage_executable"):
-                # Log a warning instead of raising an error, as extraction might still work
-                logger.warning(f"AppImage file '{appimage_path}' is not executable. Attempting extraction anyway.")
-                # Optionally show a non-critical warning to the user here if desired
-                # self.update_status(translator.get_text("Warning: AppImage file is not executable."), warning=True)
-            if not prereqs.get("libfuse_installed"):
-                 logger.warning("libFUSE might be missing, continuing anyway...")
-                 # self.update_status(translator.get_text("Warning: libFUSE missing, installation might fail."))
-            # Root/permission checks are implicitly handled below
+            # 2. Prerequisite Check Section Removed
             self.progress_bar.setValue(15)
 
             # 3. Extract AppImage (Can take time)
@@ -361,10 +485,9 @@ class InstallPage(QWidget):
                 self.update_status(translator.get_text("Creating system integration (symlinks)..."))
                 # QApplication.processEvents()
                 if not installer.create_symlinks():
-                     # This might not be critical, maybe just log a warning? 
-                     logger.warning("Failed to create one or more symlinks.")
-                     # For now, treat as success but log it.
-                     # raise RuntimeError(translator.get_text("Failed to create system integration links."))
+                    # Treat symlink failure as critical error
+                    logger.error("Failed to create system integration links.")
+                    raise RuntimeError(translator.get_text("Failed to create system integration links."))
                 self.progress_bar.setValue(80)
                 success = True # Assume success if file copy worked, symlinks are bonus
             
@@ -462,7 +585,7 @@ class InstallPage(QWidget):
         self.user_mode_radio.setText(translator.get_text("install_mode_user"))
         self.system_mode_radio.setText(translator.get_text("install_mode_system"))
         self.custom_mode_radio.setText(translator.get_text("install_mode_custom"))
-        self.register_only_radio.setText(translator.get_text("manage_mode_register"))
+        self.add_to_library_radio.setText(translator.get_text("install_mode_add_to_library"))
 
         # Update group box titles
         self.info_group.setTitle(translator.get_text("lbl_app_info"))
@@ -484,9 +607,9 @@ class InstallPage(QWidget):
             for i in range(form_layout.rowCount()):
                 label_item = form_layout.itemAt(i, QFormLayout.ItemRole.LabelRole)
                 if label_item and label_item.widget():
-                    if i == 0:  # Name
+                    if i == 1:  # Name row
                         label_item.widget().setText(translator.get_text("Name:"))
-                    elif i == 1:  # Version
+                    elif i == 2:  # Version row
                         label_item.widget().setText(translator.get_text("Version:"))
 
         # Update status text if visible

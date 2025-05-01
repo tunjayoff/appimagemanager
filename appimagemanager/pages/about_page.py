@@ -224,8 +224,14 @@ class AboutPage(QWidget):
             elif key == "about_license":
                 lbl.setText(f"<b>{translator.get_text(key)}:</b> MIT")
 
-        # Update system info labels
-        sys_keys = ["about_os", "about_python", "about_qt"]
+        # Update system information labels
+        sys_keys = ["python_version", "qt_version", "os_version", "desktop_environment"]
         for i, lbl in enumerate(self.sys_labels):
             key = sys_keys[i]
-            lbl.setText(f"<b>{translator.get_text(key)}:</b> {self.sys_values[i]}") 
+            lbl.setText(f"<b>{translator.get_text(key)}:</b> {self.sys_values[i]}")
+
+    def open_link(self, url):
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            print(f"Error: Failed to open link {url}: {e}") # Simple print fallback 

@@ -30,6 +30,13 @@ CONFIG_DIR = os.path.join(USER_HOME, ".config", "appimage-manager")
 DATABASE_PATH = os.path.join(CONFIG_DIR, "installed.json")
 LOG_PATH = os.path.join(CONFIG_DIR, "appimage-manager.log")
 SETTINGS_PATH = os.path.join(CONFIG_DIR, "settings.json")
+APP_DIR_NAME = "appimage-manager-apps"
+
+# System Installation Paths (Adjust if needed)
+SYSTEM_INSTALL_DIR = "/opt/appimage-manager-apps" # Example system-wide install location
+SYSTEM_BIN_DIR = "/usr/local/bin" # Directory for executable links
+SYSTEM_DESKTOP_DIR = "/usr/local/share/applications" # Directory for .desktop files
+# SYSTEM_ICON_DIR = "/usr/local/share/icons" # Base for icons (less commonly used directly?)
 
 # Application preferences
 DEFAULT_LANGUAGE = "en"  # Default language code (en, tr)
@@ -60,6 +67,14 @@ MAX_LOG_BACKUPS = 3
 ENABLE_AUTO_UPDATES = True  # Check for updates to installed AppImages
 ENABLE_DESKTOP_INTEGRATION = True  # Create .desktop files
 ENABLE_CONTEXT_MENU = False  # Add right-click context menu (not implemented yet) 
+
+# Installation Directories
+USER_INSTALL_BASE = os.path.join(USER_HOME, ".local/share")
+USER_INSTALL_DIR = os.path.join(USER_INSTALL_BASE, APP_DIR_NAME) # Dir for extracted installs
+# --->>> Add Directory for Copied AppImages <<<---
+MANAGED_APPIMAGES_DIR = os.path.join(USER_INSTALL_BASE, "appimage-manager-library") 
+
+# Integration Directories (Examples - might vary by system)
 
 # --- Settings Functions --- 
 

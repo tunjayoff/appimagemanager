@@ -6,10 +6,10 @@ Provides the graphical interface for configuring application settings.
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QGroupBox, QRadioButton, QComboBox, 
                              QSpacerItem, QSizePolicy, QFormLayout, QMessageBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
 
 from .. import config
-from ..i18n import get_translator, AVAILABLE_LANGUAGES # Import AVAILABLE_LANGUAGES dict
+from ..i18n import get_translator, AVAILABLE_LANGUAGES, set_language # Import AVAILABLE_LANGUAGES dict and set_language function
 
 # Get the translator instance
 translator = get_translator()
@@ -166,19 +166,19 @@ class SettingsPage(QWidget):
             selected_lang_code = self.language_combo.itemData(selected_lang_index)
             language_changed = False
             if selected_lang_code:
-                 # Check if language actually changed
                  current_lang = config.get_setting('language', config.DEFAULT_LANGUAGE)
                  if selected_lang_code != current_lang:
                      if config.set_setting('language', selected_lang_code):
                          logger.info(f"Language setting saved: {selected_lang_code}")
-                         # Update translator immediately
-                         translator.set_language(selected_lang_code)
+                         from ..i18n import set_language
+                         set_language(selected_lang_code) 
                          language_changed = True
                          settings_changed = True
                          
-                         # Update all UI text in real-time
+                         # --->>> Restore direct UI update call <<<---
                          if hasattr(self.window(), 'update_ui_texts'):
                              self.window().update_ui_texts()
+
                      else:
                          logger.error("Failed to save language setting.")
                          QMessageBox.warning(self, translator.get_text("Error"), translator.get_text("Could not save language setting."))

@@ -10,9 +10,9 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QDialog, QListWidget, QCheckBox, 
                              QDialogButtonBox, QListWidgetItem)
 from PyQt6.QtGui import QIcon, QColor, QPixmap
-from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, QEvent
 import os
-import shutil # Import shutil for rmtree
+import shutil # Import shutil for rmtree and which
 import subprocess # For running applications
 
 from .. import config
@@ -20,6 +20,7 @@ from ..i18n import get_translator
 from ..db_manager import DBManager # To interact with the database
 from .. import sudo_helper # ADD THIS IMPORT
 from .. import appimage_utils # Import appimage_utils for leftover functions
+from .. import uninstaller # Import the new uninstaller module
 # Import other necessary modules like appimage_utils or sudo_helper later
 
 # Get the translator instance
@@ -48,6 +49,7 @@ class ManagePage(QWidget):
         toolbar_layout = QHBoxLayout()
         self.refresh_button = QPushButton(QIcon.fromTheme("view-refresh"), translator.get_text("Refresh List"))
         self.scan_leftovers_button = QPushButton(QIcon.fromTheme("edit-find"), translator.get_text("Scan for Leftovers"))
+        self.clean_orphans_button = QPushButton(QIcon.fromTheme("edit-clear"), translator.get_text("Clean Orphaned Files"))
         self.uninstall_button = QPushButton(QIcon.fromTheme("edit-delete"), translator.get_text("Uninstall Selected"))
         self.run_button = QPushButton(QIcon.fromTheme("media-playback-start"), translator.get_text("Run Application"))
         self.run_button.setEnabled(False) # Disable initially
@@ -55,6 +57,7 @@ class ManagePage(QWidget):
         
         toolbar_layout.addWidget(self.refresh_button)
         toolbar_layout.addWidget(self.scan_leftovers_button)
+        toolbar_layout.addWidget(self.clean_orphans_button)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.run_button)
         toolbar_layout.addWidget(self.uninstall_button)
@@ -110,6 +113,7 @@ class ManagePage(QWidget):
         # --- Connect Signals ---
         self.refresh_button.clicked.connect(self.refresh_app_list)
         self.scan_leftovers_button.clicked.connect(self.scan_for_leftover_installs)
+        self.clean_orphans_button.clicked.connect(self.scan_for_orphaned_files)
         self.uninstall_button.clicked.connect(self.uninstall_selected_app)
         self.run_button.clicked.connect(self.run_selected_app)
         self.app_table.itemSelectionChanged.connect(self.update_button_states)
@@ -150,11 +154,30 @@ class ManagePage(QWidget):
             self.app_table.setRowCount(len(apps))
             for row, app_data in enumerate(apps):
                 is_missing = False # Flag to track if files are missing
-                install_path = app_data.get("app_install_dir")
+                install_path = app_data.get("install_path")
                 if not install_path or not os.path.exists(install_path):
+                    # For registered apps, install_path might be the AppImage path itself
+                    if app_data.get('management_type') == config.MGMT_TYPE_REGISTERED:
+                         if not os.path.exists(app_data.get("appimage_path", "")):
+                             is_missing = True
+                             logger.warning(f"Registered AppImage path not found: {app_data.get('appimage_path')}")
+                         # Don't consider registered apps 'missing' just because install_path is empty
+                    else:
+                         is_missing = True
+                         logger.warning(f"Installation path not found for app '{app_data.get('name')}': {install_path}")
+                
+                # Check executable link for non-registered
+                exec_link = app_data.get("executable_symlink")
+                if app_data.get('management_type') != config.MGMT_TYPE_REGISTERED and (not exec_link or not os.path.exists(exec_link)):
                     is_missing = True
-                    logger.warning(f"Installation path not found for app '{app_data.get('name')}': {install_path}")
-
+                    logger.warning(f"Executable symlink missing for '{app_data.get('name')}': {exec_link}")
+                
+                # Check desktop file link
+                desktop_link = app_data.get("desktop_file_path")
+                if not desktop_link or not os.path.exists(desktop_link):
+                    is_missing = True
+                    logger.warning(f"Desktop file link missing for '{app_data.get('name')}': {desktop_link}")
+                
                 # --- Icon --- 
                 icon_item = QTableWidgetItem()
                 icon = QIcon.fromTheme("application-x-appimage") # Default icon
@@ -203,7 +226,8 @@ class ManagePage(QWidget):
                 self.app_table.setItem(row, 2, version_item)
 
                 # --- Path --- 
-                path_item = QTableWidgetItem(app_data.get("app_install_dir", translator.get_text("N/A")))
+                display_path = app_data.get("install_path", translator.get_text("N/A")) 
+                path_item = QTableWidgetItem(display_path)
                 self.app_table.setItem(row, 3, path_item)
 
                 # --- Status --- 
@@ -211,15 +235,14 @@ class ManagePage(QWidget):
                 status_item = QTableWidgetItem(status_text)
                 self.app_table.setItem(row, 4, status_item)
 
-                # Store the App ID in the first column's item data for later retrieval
-                # Using Qt.ItemDataRole.UserRole for custom data storage
-                name_item.setData(Qt.ItemDataRole.UserRole, app_data.get("id"))
+                # Store the entire app_data dictionary for later retrieval
+                name_item.setData(Qt.ItemDataRole.UserRole, app_data) # <-- Store the whole dict
                 # Store the missing status as well
                 name_item.setData(Qt.ItemDataRole.UserRole + 1, is_missing)
-                # Store the executable path
-                name_item.setData(Qt.ItemDataRole.UserRole + 2, app_data.get("executable_path"))
+                # Store the executable path (No longer needed here, as it's in app_data)
+                # name_item.setData(Qt.ItemDataRole.UserRole + 2, app_data.get("executable_path"))
                 # Log the ID being set for debugging
-                logger.debug(f"Setting data for row {row}: AppID={app_data.get('id')}, Missing={is_missing}")
+                logger.debug(f"Setting data for row {row}: AppData keys: {list(app_data.keys()) if app_data else None}, Missing={is_missing}") # Log keys instead of just ID
 
                 # --- Apply visual style if missing --- 
                 if is_missing:
@@ -280,49 +303,94 @@ class ManagePage(QWidget):
             
     def run_selected_app(self):
         """Run the selected application"""
+        # logger.debug("Run button clicked!") # Remove print
+        # print("--- DEBUG: run_selected_app CALLED ---")
+        selected_items = self.app_table.selectedItems()
+        # print(f"--- DEBUG: selected_items count: {len(selected_items)} ---")
+        if not selected_items:
+            # print("--- DEBUG: Exiting run_selected_app (no selected items) ---")
+            return
+            
         selected_row = self.app_table.currentRow()
-        if selected_row < 0:
-            return
-            
         name_item = self.app_table.item(selected_row, 1)
+        # print(f"--- DEBUG: selected_row: {selected_row}, name_item exists: {name_item is not None} ---")
         if not name_item:
+            # print("--- DEBUG: Exiting run_selected_app (no name item) ---")
             return
             
-        app_name = name_item.text()
-        is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
-        executable_path = name_item.data(Qt.ItemDataRole.UserRole + 2)
+        app_data = name_item.data(Qt.ItemDataRole.UserRole) # This will now be the dictionary
+        # print(f"--- DEBUG: app_data exists: {app_data is not None} ---")
+        if not app_data or not isinstance(app_data, dict): # Add type check for safety
+            # print("--- DEBUG: Exiting run_selected_app (app_data is None or not a dict) ---")
+            logger.error(f"Retrieved invalid app_data for row {selected_row}. Type: {type(app_data)}")
+            return
         
-        if is_missing:
-            QMessageBox.information(self, 
-                translator.get_text("Cannot Run"), 
-                translator.get_text("This application is missing its files and cannot be run."))
-            return
-            
-        if not executable_path or not os.path.exists(executable_path):
-            logger.error(f"Cannot run '{app_name}': Executable path not found: {executable_path}")
-            QMessageBox.warning(self,
-                translator.get_text("Run Error"),
-                translator.get_text("Could not find the executable for '{app_name}'.").format(app_name=app_name))
-            return
-            
-        try:
-            logger.info(f"Starting application: {executable_path}")
-            self.status_label.setText(translator.get_text("Starting {app_name}...").format(app_name=app_name))
-            
-            # Use subprocess to start the application in the background
-            subprocess.Popen([executable_path], 
-                             stdout=subprocess.DEVNULL, 
-                             stderr=subprocess.DEVNULL,
-                             start_new_session=True)
-            
-            # Set a delayed status message reset
-            QTimer.singleShot(3000, lambda: self.status_label.setText(translator.get_text("Ready")))
-            
-        except Exception as e:
-            logger.error(f"Failed to start application '{app_name}': {e}")
-            QMessageBox.critical(self,
-                translator.get_text("Run Error"),
-                translator.get_text("Failed to start '{app_name}': {error}").format(app_name=app_name, error=str(e)))
+        # --- Extract exec_path (remove print)
+        exec_path = app_data.get("executable_symlink") # Default
+        management_type = app_data.get('management_type')
+        if management_type == config.MGMT_TYPE_REGISTERED:
+             # Use the key that was actually saved during registration
+             exec_path = app_data.get("executable_path") 
+             
+        # --- Check for FUSE before attempting to run ---
+        found_fusermount = shutil.which('fusermount')
+        found_fusermount3 = shutil.which('fusermount3')
+        logger.debug(f"FUSE Check: fusermount found at: {found_fusermount}, fusermount3 found at: {found_fusermount3}")
+        fuse_found = found_fusermount or found_fusermount3
+        if not fuse_found:
+            logger.warning("FUSE (fusermount/fusermount3) command not found in PATH. AppImage might fail to run.")
+            QMessageBox.warning(self, 
+                                translator.get_text("FUSE Missing"), 
+                                translator.get_text("FUSE libraries (libfuse2 or fuse3) might be required to run this AppImage, but the 'fusermount' command was not found.\n\nPlease try installing FUSE using your package manager. For Debian/Ubuntu:\n\nsudo apt update && sudo apt install libfuse2"))
+            return # Stop execution if FUSE seems missing
+        
+        if exec_path and os.path.exists(exec_path):
+            app_name = app_data.get("name", "Application")
+            logger.info(f"Attempting to run '{app_name}' from: {exec_path}")
+            try:
+                # Make executable if needed
+                home_dir = os.path.expanduser("~") 
+                if not os.access(exec_path, os.X_OK):
+                    os.chmod(exec_path, os.stat(exec_path).st_mode | 0o111)
+                    logger.info(f"Made '{exec_path}' executable.")
+                
+                # --->>> Run Popen capturing stderr <<<---
+                process = subprocess.Popen(
+                    [exec_path],
+                    cwd=home_dir,
+                    stdout=subprocess.PIPE, # Keep stdout captured (or DEVNULL if not needed)
+                    stderr=subprocess.PIPE, # Capture stderr
+                    text=True
+                )
+                
+                # Try to read stderr quickly, but don't block forever
+                stderr_output = ""
+                try:
+                    # Communicate might block, use poll/read or shorter timeout if problematic
+                    _, stderr_output = process.communicate(timeout=2) 
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"AppImage process '{app_name}' running in background, stderr not captured immediately.")
+                    # Process continues in background
+                except Exception as comm_err:
+                    logger.error(f"Error during process communication for '{app_name}': {comm_err}")
+                    
+                if stderr_output:
+                     logger.warning(f"stderr output from '{app_name}' process: {stderr_output.strip()}")
+                     # Optional: Show stderr in a pop-up if it contains relevant keywords?
+                     if "fuse" in stderr_output.lower() or "mount" in stderr_output.lower():
+                           QMessageBox.warning(self, 
+                                translator.get_text("AppImage Runtime Error"),
+                                translator.get_text("The application reported an error, possibly related to FUSE:\n\n{error}\n\nEnsure FUSE libraries (e.g., libfuse2) are installed.").format(error=stderr_output.strip()))
+                
+                logger.info(f"Successfully launched '{app_name}'.")
+            except Exception as e:
+                logger.error(f"Failed to run '{app_name}' from {exec_path}: {e}", exc_info=True)
+        else:
+             # logger.error(f"Cannot run selected application: Executable path not found or invalid: {exec_path}")
+             # print(f"--- DEBUG: Cannot run, exec_path invalid: {exec_path} ---")
+             logger.error(f"Cannot run selected application: Executable path not found or invalid: {exec_path}") # Revert log
+             QMessageBox.warning(self, translator.get_text("Error"), 
+                                 translator.get_text("Cannot run application: Executable not found."))
 
     def uninstall_selected_app(self):
         """Starts the uninstallation process for the selected app, handling missing files."""
@@ -336,18 +404,30 @@ class ManagePage(QWidget):
             logger.error("Could not get name item from selected row.")
             return
 
-        app_id = name_item.data(Qt.ItemDataRole.UserRole)
+        # Retrieve the app_data dictionary and the missing status
+        app_data_dict = name_item.data(Qt.ItemDataRole.UserRole) 
         is_missing = name_item.data(Qt.ItemDataRole.UserRole + 1)
         app_name = name_item.text() # Get app name for messages
 
-        # Handle case where App ID might be missing (None)
+        # Correctly extract the app_id from the dictionary
+        app_id = None
+        if isinstance(app_data_dict, dict):
+            app_id = app_data_dict.get("id")
+        else:
+            # This case might occur if data is corrupted or old format
+            logger.warning(f"Retrieved non-dict data for row {selected_row_index}. Type: {type(app_data_dict)}")
+            # We might still have the ID if it was stored directly in an old version
+            if isinstance(app_data_dict, (str, int)): # Check if it looks like an ID
+                 app_id = app_data_dict 
+                 logger.warning(f"Attempting to use retrieved value directly as ID: {app_id}")
+            app_data_dict = None # Ensure app_info fetch below uses the ID
+
+        # Handle case where App ID could not be determined
         if not app_id and not is_missing:
-            # This is an unexpected state: no ID but files are supposedly present?
-            logger.error(f"Corrupted entry for '{app_name}': Missing ID but files reported as present.")
+            logger.error(f"Corrupted entry for '{app_name}': Could not determine ID and files reported as present.")
             QMessageBox.critical(self, translator.get_text("Data Error"), 
                                  translator.get_text("The database entry for '{app_name}' is inconsistent (missing ID). Cannot proceed with uninstall.").format(app_name=app_name))
             return
-        # If ID is missing BUT files are also missing, we can offer to remove the DB entry.
 
         logger.info(f"Uninstall requested for App ID: {app_id} (Name: '{app_name}', Missing Files: {is_missing})")
 
@@ -374,7 +454,9 @@ class ManagePage(QWidget):
         
         try:
             db = DBManager()
-            app_info = db.get_app(app_id)
+            # Fetch app_info using the correctly extracted app_id
+            # If we started with a dict, use that directly for efficiency, otherwise fetch by ID
+            app_info = app_data_dict if app_data_dict else db.get_app(app_id) 
             
             # --- Handle missing entry cases (slightly adapted logic) ---
             if not app_info and app_id:
@@ -416,12 +498,12 @@ class ManagePage(QWidget):
             elif app_info: # App found in DB (normal case or missing files case with ID)
                 # --- File/Symlink Removal --- 
                 files_removed_successfully = False
-                uninstaller = appimage_utils.AppImageUninstaller(app_info) # Use the uninstaller class
+                uninstaller_instance = uninstaller.AppImageUninstaller(app_info) # Use the uninstaller class from the correct module
                 
                 if not is_missing:
                     logger.info("Attempting to remove application files and symlinks...")
-                    if uninstaller.requires_root:
-                        commands = uninstaller.get_uninstall_commands()
+                    if uninstaller_instance.requires_root:
+                        commands = uninstaller_instance.get_uninstall_commands()
                         if commands:
                              logger.debug(f"Executing uninstall commands with sudo: {commands}")
                              # Make sure sudo_helper is imported and works
@@ -441,7 +523,7 @@ class ManagePage(QWidget):
                              # Maybe some files were already gone? Treat as success for DB removal.
                              files_removed_successfully = True 
                     else: # Non-root uninstall
-                        if uninstaller.uninstall(): # Call the direct uninstall method
+                        if uninstaller_instance.uninstall(): # Call the direct uninstall method
                             logger.info("Non-root uninstallation successful.")
                             files_removed_successfully = True
                         else:
@@ -623,6 +705,7 @@ class ManagePage(QWidget):
         # Update buttons
         self.refresh_button.setText(translator.get_text("Refresh List"))
         self.scan_leftovers_button.setText(translator.get_text("Scan for Leftovers"))
+        self.clean_orphans_button.setText(translator.get_text("Clean Orphaned Files"))
         self.uninstall_button.setText(translator.get_text("Uninstall Selected"))
         self.run_button.setText(translator.get_text("Run Application"))
         
@@ -700,13 +783,49 @@ class ManagePage(QWidget):
                         
                 else:
                     logger.info("User cancelled leftover removal dialog.")
-
+    
         except Exception as e:
             logger.error(f"Error during leftover scan: {e}", exc_info=True)
             self.show_loading(False, translator.get_text("Error during scan."))
             QMessageBox.critical(self, 
                                translator.get_text("Error"), 
                                translator.get_text("An error occurred while scanning for leftovers. Check logs."))
+
+    def scan_for_orphaned_files(self):
+        """Scans for orphaned .desktop files and presents them for removal."""
+        logger.info("Scanning for orphaned integration files (.desktop)...")
+        try:
+            orphans = appimage_utils.find_orphaned_integrations()
+            if orphans:
+                logger.info(f"Found {len(orphans)} potential orphaned integration file(s).")
+                # Re-use LeftoverSelectionDialog, formatting data appropriately
+                dialog = LeftoverSelectionDialog(orphans, self)
+                dialog.setWindowTitle(translator.get_text("Orphaned Integration Files"))
+                dialog.findChild(QLabel).setText(translator.get_text("Found integration files (.desktop) that seem to be managed by this tool but don't belong to any known application. Select items to remove:"))
+                
+                if dialog.exec_() == QDialog.Accepted:
+                    selected_paths = dialog.get_selected_paths()
+                    if selected_paths:
+                        logger.info(f"User selected {len(selected_paths)} orphaned integration files to remove.")
+                        removed_count = 0
+                        overall_success = True
+                        for path in selected_paths:
+                            if appimage_utils.remove_orphaned_integration(path):
+                                removed_count += 1
+                            else:
+                                overall_success = False
+                                
+                        if overall_success:
+                            QMessageBox.information(self, translator.get_text("Cleanup Complete"), translator.get_text("Removed {count} selected orphaned integration file(s).").format(count=removed_count))
+                        else:
+                            QMessageBox.warning(self, translator.get_text("Cleanup Issue"), translator.get_text("Could not remove all selected orphaned files. Removed {count}. Check logs.").format(count=removed_count))
+                        # Refresh desktop database implicitly done by remove_orphaned_integration
+            else:
+                logger.info("No potential orphaned integration files found.")
+                QMessageBox.information(self, translator.get_text("Scan Complete"), translator.get_text("No orphaned integration files (.desktop) found."))
+        except Exception as e:
+            logger.error(f"Error during orphaned integration scan: {e}", exc_info=True)
+            QMessageBox.critical(self, translator.get_text("Error"), translator.get_text("An error occurred while scanning for orphaned files.") + f"\n{e}")
 
 # --- Leftover Files Dialog ---
 
@@ -842,6 +961,43 @@ class LeftoverInstallDialog(QDialog):
             item = self.list_widget.item(i)
             if item.checkState() == Qt.CheckState.Checked:
                 selected_paths.append(item.data(Qt.ItemDataRole.UserRole))
+        return selected_paths
+
+# --- Leftover Selection Dialog ---
+class LeftoverSelectionDialog(QDialog):
+    def __init__(self, leftovers, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(translator.get_text("Select Leftovers to Remove"))
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout(self)
+
+        label_text = translator.get_text("Select the items you are sure are leftovers and should be removed:")
+        layout.addWidget(QLabel(label_text))
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.ExtendedSelection) # Allow multiple selections
+        for item in leftovers:
+            # Display type (marked/unmarked install, config/cache, desktop)
+            display_type = item.get('type', 'unknown')
+            if 'path' in item and item['path'].endswith('.desktop'): display_type = 'integration' 
+            
+            list_item = QListWidgetItem(f"{item.get('guessed_name', 'Unknown Name')} ({display_type}) - {item['path']}")
+            list_item.setData(Qt.UserRole, item['path']) # Store the full path
+            self.list_widget.addItem(list_item)
+            
+        layout.addWidget(self.list_widget)
+
+        # Buttons
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+    def get_selected_paths(self):
+        selected_paths = []
+        for item in self.list_widget.selectedItems():
+            selected_paths.append(item.data(Qt.UserRole))
         return selected_paths
 
 # --- Logger Setup (Example - Adapt as needed) ---
