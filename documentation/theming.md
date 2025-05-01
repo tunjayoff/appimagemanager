@@ -1,40 +1,64 @@
-# Theming Guide: Changing AppImage Manager's Look
+# Theming Guide
 
-Do you prefer your apps bright and light, or cool and dark? AppImage Manager lets you choose! This guide explains how to change the application's theme (its colors and overall look).
+<p align="center">
+  <img src="../resources/icon.png" alt="AppImage Manager Logo" width="100" />
+</p>
 
-## How to Switch Themes
+<p align="center"><strong>Customizing AppImage Manager's Appearance</strong></p>
 
-There are two easy ways to change the look:
+This guide explains how to change AppImage Manager's visual theme and understand how theming works.
 
-1.  **Using the Settings Page:**
-    *   Click "Settings" in the sidebar menu on the left.
-    *   Look for the "Appearance" or "Theme" section.
-    *   You'll see options like "Light Theme" and "Dark Theme". Click the one you want!
-    *   Click "Save" if there's a save button.
-2.  **Using the Quick Toggle Button (☀️/🌙):**
-    *   Look at the very top of the main window (in the toolbar area).
-    *   If you see a little button that looks like a **Sun (☀️)** or a **Moon (🌙)**, that's the quick theme toggle!
-    *   Clicking this button instantly switches between the Light and Dark themes.
+## 📋 Table of Contents
 
-**Important Note:** Sometimes, after changing the theme, not *everything* might update its look instantly. For the new theme to apply perfectly everywhere, it's often best to **close and reopen** the AppImage Manager application.
+- [Changing Themes](#changing-themes)
+- [Theme Implementation](#theme-implementation)
+- [Custom Theming](#custom-theming)
 
-## How Do Themes Work? (A Peek Behind the Scenes)
+## Changing Themes
 
-It's like changing the paint and wallpaper in a room!
+AppImage Manager offers two visual themes: Light and Dark. You can switch between them in two ways:
 
-1.  **Basic Rules (The Blueprint):** The application has a set of basic rules (called a stylesheet) that describe how things *should* look in general. For example, "buttons should have rounded corners" or "the background should be color X". This blueprint uses placeholders for the actual colors, like `%BACKGROUND_COLOR%` or `%BUTTON_COLOR%`.
-2.  **Color Palettes (Paint Cans):** There are two lists of colors defined in the code:
-    *   `LIGHT_THEME`: Contains all the bright color values (like white backgrounds, dark text).
-    *   `DARK_THEME`: Contains all the dark color values (like dark grey backgrounds, light text).
-3.  **Applying the Paint:**
-    *   When you start the app or choose a theme, the app looks at which theme you picked (Light or Dark).
-    *   It takes the basic blueprint (the stylesheet).
-    *   It replaces all the color placeholders (like `%BACKGROUND_COLOR%`) with the actual color codes from the chosen palette (Light or Dark).
-    *   This finished set of rules with real colors is then applied to the whole application, changing how everything looks.
-    *   The app also remembers your choice (light or dark) by saving it in the `settings.json` file (see the **[Configuration Guide](./configuration.md)**), so it starts with your preferred theme next time.
+### Via Settings Page
 
-## Can I Make My Own Theme?
+1. Click "Settings" in the left sidebar
+2. Navigate to the "Appearance" section
+3. Select your preferred theme (Light or Dark)
+4. Click "Save"
+5. Restart the application for the changes to fully apply
 
-Right now, the application only comes with the built-in Light and Dark themes. There isn't a menu option to pick custom colors for buttons or text.
+### Via Quick Toggle
 
-If you are comfortable with programming, you *could* technically change the color codes directly inside the `LIGHT_THEME` and `DARK_THEME` lists within the `main.py` source code file to create your own look. However, this is an advanced step and not recommended for regular users. 
+AppImage Manager includes a convenient theme toggle button:
+
+1. Look for the Sun (☀️) or Moon (🌙) icon in the application toolbar
+2. Click this button to instantly switch between Light and Dark themes
+3. Restart the application to ensure all elements update properly
+
+**Note**: Some interface elements may not immediately reflect the theme change until the application is restarted.
+
+## Theme Implementation
+
+AppImage Manager implements theming through a stylesheet-based approach:
+
+1. The application defines a base stylesheet with placeholders for color values
+2. Two color palettes are defined:
+   - **Light Theme**: Bright backgrounds with dark text
+   - **Dark Theme**: Dark backgrounds with light text
+3. When a theme is selected, the application:
+   - Substitutes the appropriate color values into the stylesheet
+   - Applies the completed stylesheet to the interface
+   - Saves the preference in the configuration file
+
+This approach allows for consistent styling across the entire application while maintaining flexibility.
+
+## Custom Theming
+
+While AppImage Manager currently only provides Light and Dark themes without built-in customization options, advanced users familiar with the codebase could modify the theme definitions.
+
+The color palettes are defined in the `main.py` file as `LIGHT_THEME` and `DARK_THEME` dictionaries. Modifying these values would allow for custom color schemes, but this is not officially supported and should be approached with caution.
+
+---
+
+<p align="center">
+  <em>For information about other customization options, see the <a href="configuration.md">Configuration Guide</a></em>
+</p> 

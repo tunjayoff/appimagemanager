@@ -172,7 +172,7 @@ class InstallPage(QWidget):
         main_layout.addSpacing(20) # Add spacing before install button
 
         # --- Install Button ---
-        self.install_button = QPushButton(translator.get_text("btn_install"))
+        self.install_button = QPushButton(translator.get_text("install_button"))
         self.install_button.setEnabled(False) # Disabled until file selected
         self.install_button.clicked.connect(self.start_installation) # Connect to placeholder
         main_layout.addWidget(self.install_button, alignment=Qt.AlignmentFlag.AlignRight)
@@ -820,7 +820,7 @@ exec "{final_installed_exec_path}" "$@"
 
         # Update buttons
         self.custom_path_button.setText(translator.get_text("btn_browse"))
-        self.install_button.setText(translator.get_text("btn_install"))
+        self.install_button.setText(translator.get_text("install_button"))
         # Retranslate recent button if it exists
         if hasattr(self, 'recent_button'):
             self.recent_button.setText(translator.get_text("Recent AppImages"))

@@ -1,0 +1,8 @@
+include LICENSE
+include README.md
+include requirements.txt
+recursive-include documentation *.md
+recursive-include appimagemanager/resources *.json *.png
+recursive-include images *.png
+include appimagemanager/resources/icon.png
+include resources/icon.png 

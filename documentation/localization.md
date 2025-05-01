@@ -1,79 +1,129 @@
-# Localization Guide: Speaking Your Language!
+# Localization Guide
 
-AppImage Manager tries to be friendly and speak different languages! This is called "localization". This guide explains how the app knows what language to use and how you could even help teach it a new one.
+<p align="center">
+  <img src="../resources/icon.png" alt="AppImage Manager Logo" width="100" />
+</p>
 
-## How Does the App Know What Language to Use?
+<p align="center"><strong>Using and Contributing to Multi-Language Support</strong></p>
 
-It's like the app has different dictionaries for different languages.
+This guide explains how AppImage Manager handles different languages and how you can contribute translations.
 
-1.  **The Dictionary Files (`translations_*.json`):** Inside the application's code, there's a special folder (`appimagemanager/resources/`). This folder contains files named like `translations_en.json` (for English), `translations_tr.json` (for Turkish), and maybe others.
-    *   Each file is like a dictionary for one language. It contains a list of special code words (called "keys") and the matching word or phrase in that specific language.
-    *   **Example (English dictionary `translations_en.json`):**
-        ```json
-        {
-            "app_name": "AppImage Manager", 
-            "btn_install": "Install"
-        }
-        ```
-    *   **Example (Turkish dictionary `translations_tr.json`):**
-        ```json
-        {
-            "app_name": "AppImage Yöneticisi", 
-            "btn_install": "Kur"
-        }
-        ```
-2.  **The Translator Helper (`i18n.py`):** The app has a helper module that acts like a translator. When the app needs to show some text (like a button label or a menu item):
-    *   It doesn't use the English text directly in its code.
-    *   Instead, it tells the translator helper the special **key** for the text it wants (e.g., `"btn_install"`).
-    *   The translator helper looks at which language you selected in the Settings.
-    *   It opens the dictionary file for that language (e.g., `translations_tr.json`).
-    *   It finds the key (`"btn_install"`) in the dictionary and gets the matching translated word (`"Kur"`).
-    *   It gives that translated word back to the main app to display on the screen.
-3.  **What if a Translation is Missing?**
-    *   The app always uses English as a backup. If the translator helper can't find a key in your selected language's dictionary, it will automatically look for it in the English dictionary (`translations_en.json`).
-    *   If it can't even find the key in the English dictionary (maybe it's a very new button), it will usually just display the key itself (like `btn_install`) as a last resort, and it might make a note in the log file.
-4.  **Updating the Screen (`retranslateUi`):** When you change the language in the Settings page, the app needs to tell all the visible buttons and labels to ask the translator helper for their text again using the *new* language dictionary. Many parts of the app have a special function called `retranslateUi` that does exactly this.
+## 📋 Table of Contents
 
-## How to Help Translate AppImage Manager (Adding a New Language)
+- [Changing Language](#changing-language)
+- [Translation System Overview](#translation-system-overview)
+- [Contributing Translations](#contributing-translations)
+- [Testing Translations](#testing-translations)
+- [Translation Guidelines](#translation-guidelines)
 
-Do you speak a language that AppImage Manager doesn't support yet? You can help translate it! Here's how:
+## Changing Language
 
-1.  **Find the Language Code:** Every language has a short code (usually two letters, based on a standard called ISO 639-1). For example, German is `de`, French is `fr`, Spanish is `es`.
-2.  **Copy the English Dictionary:**
-    *   Find the application's code folder. Inside it, go to the `appimagemanager/resources/` subfolder.
-    *   Find the file `translations_en.json`.
-    *   Make a **copy** of this file.
-3.  **Rename Your Copy:** Rename the copied file using the language code you found in step 1. It should look like `translations_<your_code>.json`. For example, if you are translating to German, rename it to `translations_de.json`.
-4.  **Translate!**
-    *   Open your new `translations_<your_code>.json` file with a plain text editor (like Notepad on Windows, TextEdit on Mac, or Gedit/Kate on Linux). Make sure the editor saves in **UTF-8** format (this is important for special characters).
-    *   Now, go through the file line by line. For each line, you will see a "key" in quotes, then a colon `:`, then the English translation in quotes.
-    *   **ONLY translate the English part** (the value after the colon). **DO NOT change the key** (the part before the colon).
-    *   **Example:** Change this:
-        ```json
-        "btn_install": "Install",
-        ```
-        To this (for German):
-        ```json
-        "btn_install": "Installieren",
-        ```
-    *   **Be careful with JSON rules:** Make sure every line except the very last one inside the `{ }` ends with a comma (`,`). All text must be inside double quotes (`"`).
-    *   **Language Name:** It's helpful to add a line near the beginning to specify the language's name in its own language, like this for German:
-        ```json
-        "language_name": "Deutsch",
-        ```
-5.  **Test Your Translation:**
-    *   If you have the development setup (see **[Development Guide](./development.md)**), run the app (`python -m appimagemanager`).
-    *   Go to Settings -> Language.
-    *   Your new language should now appear in the list!
-    *   Select it and Save.
-    *   Restart the application.
-    *   Click through all the pages and menus. Does everything look correct in the new language?
-6.  **Share Your Work:** If you translated the file and want to share it so everyone can use it, you'll need to send the new `translations_<your_code>.json` file back to the project developers. Check the project's main page (like on GitHub) for instructions on how to contribute.
+AppImage Manager offers multiple language options that can be changed through the Settings interface:
 
-**Things to Watch Out For:**
+1. Click "Settings" in the left sidebar
+2. In the "Language" section, select your preferred language
+3. Click "Save"
+4. Restart the application to apply the change
 
-*   **Save as UTF-8:** This encoding helps make sure special characters in different languages display correctly.
-*   **JSON Rules:** One missing comma or quote can stop the file from working.
-*   **Placeholders:** Sometimes you'll see things like `{app_name}` or `{0}` inside the English text. These are placeholders where the app will insert dynamic information (like the actual name of an app). Make sure you keep these placeholders exactly as they are in your translation!
-    *   Example English: `"status_installing": "Installing {app_name}..."`
-    *   Example German: `"status_installing": "Installiere {app_name}..."` 
+Currently supported languages include:
+- English (en)
+- Turkish (tr)
+
+## Translation System Overview
+
+AppImage Manager uses a straightforward JSON-based translation system:
+
+### Dictionary Files
+
+Each language has its own dictionary file located in the application resources directory:
+- `translations_en.json` (English)
+- `translations_tr.json` (Turkish)
+- etc.
+
+### Translation Mechanism
+
+The application uses a key-based translation strategy:
+
+1. Instead of hardcoding text, the code references translation keys
+2. The translation system looks up the key in the appropriate language file
+3. If the key exists, the translated text is displayed
+4. If the key is missing, the system falls back to English
+5. If the key doesn't exist in any language file, the key itself is displayed
+
+#### Example:
+
+English Dictionary (`translations_en.json`):
+```json
+{
+    "app_name": "AppImage Manager",
+    "btn_install": "Install"
+}
+```
+
+Turkish Dictionary (`translations_tr.json`):
+```json
+{
+    "app_name": "AppImage Yöneticisi",
+    "btn_install": "Kur"
+}
+```
+
+The code references these keys rather than direct text, enabling seamless language switching.
+
+## Contributing Translations
+
+You can help translate AppImage Manager into your language by following these steps:
+
+### Creating a New Language File
+
+1. Determine your language's ISO code (e.g., "fr" for French, "de" for German)
+2. Copy the English dictionary file (`translations_en.json`)
+3. Rename it to `translations_<language_code>.json` (e.g., `translations_fr.json`)
+4. Translate the values (right side) while preserving the keys (left side)
+
+### Translation Guidelines
+
+- **Only translate values**, never modify the keys
+- Preserve any formatting placeholders (e.g., `{0}`, `{app_name}`)
+- Maintain any HTML tags if present
+- Ensure your file uses UTF-8 encoding to support special characters
+- Add an entry for your language's name in its native form:
+  ```json
+  "language_name": "Français"
+  ```
+
+### JSON Format Rules
+
+- Each entry should follow this format: `"key": "translated value"`
+- Every line except the last one must end with a comma
+- All text must be enclosed in double quotes
+- Special characters in strings must be escaped properly
+
+## Testing Translations
+
+To test your translation:
+
+1. Place your translation file in the application's resources directory
+2. Restart the application
+3. Go to Settings and select your language
+4. Restart again to apply
+5. Navigate through all screens to verify your translations
+
+### Common Issues
+
+- **Untranslated Elements**: May indicate missing translation keys
+- **Formatting Problems**: Check for missing placeholders
+- **Application Crashes**: Verify JSON syntax (missing commas, quotes)
+
+## Submitting Your Translation
+
+Once you've created and tested your translation:
+
+1. Make sure your JSON file has valid syntax
+2. Submit it to the project according to the contribution guidelines (usually via a pull request on GitHub)
+
+---
+
+<p align="center">
+  <em>For information about other customization options, see the <a href="configuration.md">Configuration Guide</a></em>
+</p> 
