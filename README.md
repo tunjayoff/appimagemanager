@@ -1,193 +1,304 @@
-# appimagemanager
+# AppImage Manager
 
-> Easily install, manage, and remove AppImage applications on Ubuntu 24.04, with full JSON-based multi-language support.
+**Manage your AppImage files with ease on Ubuntu 24.04 and above! (may works for other debian based distros)**
 
-[![PyPI version](https://badge.fury.io/py/appimagemanager.svg)](https://badge.fury.io/py/appimagemanager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 GitHub: [https://github.com/tunjayoff/appimagemanager](https://github.com/tunjayoff/appimagemanager)
 
+AppImage Manager provides a user-friendly interface to install, organize, launch, and remove AppImage applications. It integrates them into your system menu and helps keep things tidy.
+
 ---
 
-## 📸 Screenshots
+## 📸 Screenshot
 
-![Main Window](docs/screenshot.png)
+![Main Window](documentation/screenshot.png)
 
-## English
+---
 
-## Table of Contents
+## ✨ Features
 
-- [Description](#description)
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Translations](#translations)
-- [Theming](#theming)
-- [Build & Installation Script](#build--installation-script)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-- [Contact](#contact)
+*   **Effortless Installation:**
+    *   Install AppImages system-wide or just for your user.
+    *   Choose a custom installation location.
+    *   Drag & drop `.AppImage` files onto the window.
+    *   "Register Only" mode: Add AppImages to the manager and menu without moving the original file.
+*   **Simple Management:**
+    *   View all managed AppImages in a sortable list.
+    *   Search and filter your applications.
+    *   Launch apps directly from the manager.
+*   **Clean Uninstallation:**
+    *   Remove installed AppImages and their menu entries with one click.
+    *   Optional scan for leftover configuration files after uninstall.
+*   **Recovery & Cleanup:**
+    *   "Scan for Leftovers" feature helps find and remove installations missed by the database (e.g., after database loss).
+*   **User-Friendly Interface:**
+    *   Light and Dark themes with a quick toggle.
+    *   Multi-language support (English and Turkish included).
 
-## Description
+---
 
-AppImage Manager is a user-friendly desktop application for Ubuntu 24.04 and above. It streamlines the process of installing, organizing, launching, and removing AppImage applications, offering both system-wide and per-user installations. With a dynamic PyQt6 interface, JSON-based multi-language support, and light/dark theming, it adapts seamlessly to your workflow.
+## 🚀 Installation
 
-## Features
+There are three primary ways to install AppImage Manager:
 
-- System-wide and per-user AppImage installations
-- Discover, search, filter, and launch installed AppImages
-- Create desktop shortcuts and menu entries automatically
-- One-click uninstall with associated cleanup
-- Real-time language switching without restart
-- Light and dark themes with animated toggle
-- Drag-and-drop support for easy installation
+**1. Using a Pre-built `.deb` File (Easiest & Recommended for Users)**
 
-## Installation
+This is the simplest way if a `.deb` file is available from a release.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/tunjayoff/appimagemanager.git
-   cd appimagemanager
-   ```
-2. Install required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Launch the application:
-   ```bash
-   python3 main.py
-   ```
+1.  **Download:** Go to the [Project Releases Page](https://github.com/tunjayoff/appimagemanager/releases) and download the latest `.deb` file (e.g., `appimagemanager_X.Y.Z_amd64.deb`).
+2.  **Install via GUI:** In most cases, you can simply double-click the downloaded `.deb` file. Your system's software installer should open and allow you to install it (you might need to enter your password).
+3.  **Install via Terminal (Alternative):**
+    ```bash
+    # Navigate to the directory where you downloaded the file
+    # cd ~/Downloads 
 
-## Usage
+    # Install the package (replace with the actual filename)
+    sudo dpkg -i appimagemanager_X.Y.Z_amd64.deb
 
-After starting the app, use the sidebar to navigate:
-- **Install**: Choose and install new AppImage files.
-- **Manage**: Browse, search, and launch or remove installed apps.
-- **Settings**: Configure language, theme, and defaults.
-- **About**: View version, credits, and system info.
+    # If you see errors about missing dependencies, run:
+    sudo apt --fix-broken install 
+    ```
+4.  **Launch:** Find AppImage Manager in your application menu or run `appimagemanager` in the terminal.
 
-## Configuration
+**2. Using the Build & Install Script (For Building from Source)**
 
-User settings (theme, language) are stored in `~/.config/appimage-manager/settings.json`. You can manually edit this file or use the Settings page in the UI.
+This script compiles the application from the source code and installs it as a system package (`.deb`). Useful if you want the latest code installed system-wide.
 
-## Translations
-
-All UI strings reside in `resources/translations_<lang>.json`. To add a new language:
-1. Copy an existing JSON file to `resources/translations_<new>.json`.
-2. Translate each key-value pair.
-3. Restart or switch language in-app.
-
-## Theming
-
-Toggle light/dark mode via the switch in the toolbar. Theme preferences are saved automatically.
-
-## Build & Installation Script
-
-A convenience script `build_and_install.sh` automates creating a standalone executable, packaging it into a Debian `.deb`, and installing it system-wide.
-
-Prerequisites:
 ```bash
-sudo apt update
-sudo apt install -y python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
-```
+# 1. Clone the repository
+# git clone https://github.com/tunjayoff/appimagemanager.git
+# cd appimagemanager
 
-Usage:
-```bash
+# 2. Install build dependencies
+# sudo apt update
+# sudo apt install -y python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
+
+# 3. Run the script
 chmod +x build_and_install.sh
-./build_and_install.sh
-# Then launch with:
+./build_and_install.sh # Might ask for sudo password
+
+# 4. Launch!
 appimagemanager
 ```
 
-## Contributing
+**3. Running Directly from Source (For Development/Testing)**
 
-## Acknowledgements
-
-- Built with PyQt6 and Python 3.
-- Inspired by native Linux package managers.
-
-## Contact
-
-- Maintainer: [tunjayoff](https://github.com/tunjayoff)
-- Repository: https://github.com/tunjayoff/appimagemanager
-
-## Türkçe
-
-## Açıklama
-AppImage Manager, Ubuntu 24.04 ve üzeri için kullanıcı dostu bir masaüstü uygulamasıdır. AppImage uygulamalarının sistem çapında veya kullanıcı bazında yüklenmesi, düzenlenmesi, başlatılması ve kaldırılmasını kolaylaştırır. Dinamik PyQt6 arayüzü, JSON tabanlı çoklu dil desteği ve açık/koyu tema seçenekleriyle iş akışınıza sorunsuzca uyum sağlar.
-
-## Özellikler
-
-- Sistem çapında ve kullanıcı bazında AppImage yüklemeleri
-- Yüklü AppImage'ları keşfetme, arama, filtreleme ve başlatma
-- Masaüstü kısayolları ve menü girdileri otomatik oluşturma
-- Tek tıklamayla kaldırma ve temizlik
-- Yeniden başlatma gerektirmeden gerçek zamanlı dil değişimi
-- Animasyonlu açık/kapalı tema geçişi
-- Sürükle-bırak ile kolay yükleme
-
-## Kurulum
-1. Repoyu klonlayın:
-   ```bash
-   git clone https://github.com/tunjayoff/appimagemanager.git
-   cd appimagemanager
-   ```
-2. Bağımlılıkları yükleyin:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Uygulamayı başlatın:
-   ```bash
-   python3 main.py
-   ```
-
-## Kullanım
-Uygulamayı başlattıktan sonra kenar çubuğunu kullanarak gezinin:
-- **Install**: Yeni AppImage dosyalarını seçip yükleyin.
-- **Manage**: Yüklü uygulamaları göz atın, arayın, başlatın veya kaldırın.
-- **Settings**: Dil, tema ve varsayılanları yapılandırın.
-- **About**: Sürüm, geliştirici ve sistem bilgilerini görüntüleyin.
-
-## Yapılandırma
-Kullanıcı ayarları `~/.config/appimage-manager/settings.json` içinde saklanır. Bu dosyayı elle düzenleyebilir veya UI üzerindeki Ayarlar sayfasını kullanabilirsiniz.
-
-## Çeviriler
-Tüm arayüz metinleri `resources/translations_<lang>.json` dosyalarında bulunur. Yeni dil eklemek için:
-1. Var olan bir JSON dosyasını `translations_<new>.json` olarak kopyalayın.
-2. Anahtar-değer çiftlerini çevirin.
-3. Uygulamayı yeniden başlatın veya dil değiştirin.
-
-## Tema
-Araç çubuğundaki anahtar ile açık/kapalı tema arasında geçiş yapın. Tema tercihleri otomatik kaydedilir.
-
-## Build & Installation Script
-
-A convenience script `build_and_install.sh` automates creating a standalone executable, packaging it into a Debian `.deb`, and installing it system-wide.
-
-Prerequisites:
 ```bash
-sudo apt update
-sudo apt install -y python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
+# 1. Clone the repository (if not done already)
+# git clone https://github.com/tunjayoff/appimagemanager.git
+# cd appimagemanager
+
+# 2. Create a virtual environment
+# python3 -m venv .venv
+# source .venv/bin/activate
+
+# 3. Install requirements
+# pip install -r requirements.txt
+
+# 4. Run
+# python -m appimagemanager
 ```
 
-Usage:
+---
+
+## 📖 Usage
+
+1.  Launch AppImage Manager.
+2.  **Install Tab:**
+    *   Click "Browse..." or drag & drop an `.AppImage` file.
+    *   Select an installation mode (Copy files, System-wide, Custom, or Register Only).
+    *   Click "Install AppImage".
+3.  **Manage Tab:**
+    *   View, search, and sort your managed AppImages.
+    *   Select an app and click "Run Application" or "Uninstall Selected".
+    *   Click "Scan for Leftovers" to find untracked installations.
+4.  **Settings Tab:**
+    *   Change language or theme.
+
+For more detailed information, please refer to the **[Full Documentation](documentation/index.md)**.
+
+---
+
+## ⚙️ Configuration & Data
+
+*   **Settings:** Stored in `~/.config/appimage-manager/settings.json`
+*   **App Database:** Stored in `~/.config/appimage-manager/installed.json`
+*   **Logs:** Recorded in `~/.config/appimage-manager/appimage-manager.log`
+
+(See the **[Configuration Guide](documentation/configuration.md)** for details.)
+
+---
+
+## 🌍 Translations
+
+UI text is stored in `resources/translations_<lang>.json`. Contributions for new languages are welcome!
+
+(See the **[Localization Guide](documentation/localization.md)** for details.)
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome. Please check the repository issues page.
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgements
+
+- Built with Python 3 and PyQt6.
+- Inspired by other Linux package and AppImage management tools.
+
+---
+
+## 🇹🇷 Türkçe
+
+**AppImage dosyalarınızı Ubuntu 24.04 ve üzeri sistemlerde kolayca yönetin! (diğer debian tabanlı dağıtımlarda da çalışabilir)**
+
+AppImage Manager, AppImage uygulamalarını yüklemek, düzenlemek, başlatmak ve kaldırmak için kullanıcı dostu bir arayüz sunar. Uygulamaları sistem menünüze entegre eder ve düzeni korumanıza yardımcı olur.
+
+---
+
+## ✨ Özellikler
+
+*   **Zahmetsiz Kurulum:**
+    *   AppImage'ları sistem geneline veya sadece kullanıcınıza özel kurun.
+    *   Özel bir kurulum konumu seçin.
+    *   `.AppImage` dosyalarını pencereye sürükleyip bırakın.
+    *   "Sadece Kaydet" modu: Orijinal dosyayı taşımadan AppImage'ları yöneticiye ve menüye ekleyin.
+*   **Basit Yönetim:**
+    *   Yönetilen tüm AppImage'ları sıralanabilir bir listede görüntüleyin.
+    *   Uygulamalarınızı arayın ve filtreleyin.
+    *   Uygulamaları doğrudan yöneticiden başlatın.
+*   **Temiz Kaldırma:**
+    *   Kurulu AppImage'ları ve menü girdilerini tek tıkla kaldırın.
+    *   Kaldırma sonrası isteğe bağlı artık yapılandırma dosyası taraması.
+*   **Kurtarma ve Temizlik:**
+    *   "Artıkları Tara" özelliği, veritabanı tarafından unutulmuş (örn. veritabanı kaybı sonrası) kurulumları bulup kaldırmanıza yardımcı olur.
+*   **Kullanıcı Dostu Arayüz:**
+    *   Hızlı geçiş düğmeli Açık ve Koyu temalar.
+    *   Çoklu dil desteği (İngilizce ve Türkçe dahil).
+
+---
+
+## 🚀 Kurulum
+
+AppImage Manager'ı kurmanın üç ana yolu vardır:
+
+**1. Hazır Derlenmiş `.deb` Dosyası ile (En Kolay ve Kullanıcılar için Önerilen)**
+
+Eğer bir sürümden `.deb` dosyası mevcutsa, bu en basit yöntemdir.
+
+1.  **İndirme:** [Proje Sürümleri Sayfasına](https://github.com/tunjayoff/appimagemanager/releases) gidin ve en son `.deb` dosyasını indirin (örn. `appimagemanager_X.Y.Z_amd64.deb`).
+2.  **GUI ile Kurulum:** Çoğu durumda, indirilen `.deb` dosyasına çift tıklamanız yeterlidir. Sisteminizin yazılım yükleyicisi açılmalı ve kurmanıza izin vermelidir (parolanızı girmeniz gerekebilir).
+3.  **Terminal ile Kurulum (Alternatif):**
+    ```bash
+    # Dosyayı indirdiğiniz dizine gidin
+    # cd ~/İndirilenler
+
+    # Paketi kurun (gerçek dosya adıyla değiştirin)
+    sudo dpkg -i appimagemanager_X.Y.Z_amd64.deb
+
+    # Eksik bağımlılıklarla ilgili hatalar görürseniz, şunu çalıştırın:
+    sudo apt --fix-broken install
+    ```
+4.  **Başlatma:** AppImage Manager'ı uygulama menünüzde bulun veya terminalde `appimagemanager` komutunu çalıştırın.
+
+**2. Derleme ve Kurulum Betiği ile (Kaynaktan Derlemek İçin)**
+
+Bu betik, uygulamayı kaynak koddan derler ve bir sistem paketi (`.deb`) olarak kurar. En son kodu sistem geneline kurmak istiyorsanız kullanışlıdır.
+
 ```bash
-chmod +x build_and_install.sh
-./build_and_install.sh
-# Then launch with:
-appimagemanager
+# 1. Clone the repository (if not done already)
+# git clone https://github.com/tunjayoff/appimagemanager.git
+# cd appimagemanager
+
+# 2. Create a virtual environment
+# python3 -m venv .venv
+# source .venv/bin/activate
+
+# 3. Install requirements
+# pip install -r requirements.txt
+
+# 4. Run
+# python -m appimagemanager
 ```
 
-## Contributing
+**3. Doğrudan Kaynaktan Çalıştırma (Geliştirme/Test için)**
 
-## Acknowledgements
+```bash
+# 1. Clone the repository (if not done already)
+# git clone https://github.com/tunjayoff/appimagemanager.git
+# cd appimagemanager
 
-- Built with PyQt6 and Python 3.
-- Inspired by native Linux package managers.
+# 2. Create a virtual environment
+# python3 -m venv .venv
+# source .venv/bin/activate
 
-## Contact
+# 3. Install requirements
+# pip install -r requirements.txt
 
-- Maintainer: [tunjayoff](https://github.com/tunjayoff)
-- Repository: https://github.com/tunjayoff/appimagemanager 
+# 4. Run
+# python -m appimagemanager
+```
+
+---
+
+## 📖 Kullanım
+
+1.  AppImage Manager'ı başlatın.
+2.  **Kur Sekmesi:**
+    *   "Gözat..." tıklayın veya bir `.AppImage` dosyasını sürükleyip bırakın.
+    *   Bir kurulum modu seçin (Dosyaları kopyala, Sistem geneli, Özel veya Sadece Kaydet).
+    *   "AppImage Kur" tıklayın.
+3.  **Yönet Sekmesi:**
+    *   Yönetilen AppImage'larınızı görüntüleyin, arayın ve sıralayın.
+    *   Bir uygulama seçin ve "Uygulamayı Çalıştır" veya "Seçileni Kaldır" tıklayın.
+    *   Takip edilmeyen kurulumları bulmak için "Artıkları Tara" tıklayın.
+4.  **Ayarlar Sekmesi:**
+    *   Dili veya temayı değiştirin.
+
+Daha ayrıntılı bilgi için lütfen **[Tam Dokümantasyona](documentation/index.md)** bakın.
+
+---
+
+## ⚙️ Yapılandırma ve Veriler
+
+*   **Ayarlar:** `~/.config/appimage-manager/settings.json` içinde saklanır
+*   **Uygulama Veritabanı:** `~/.config/appimage-manager/installed.json` içinde saklanır
+*   **Günlükler:** `~/.config/appimage-manager/appimage-manager.log` içine kaydedilir
+
+(Ayrıntılar için **[Yapılandırma Kılavuzuna](documentation/configuration.md)** bakın.)
+
+---
+
+## 🌍 Çeviriler
+
+UI metinleri `resources/translations_<lang>.json` içinde saklanır. Yeni diller için katkılar memnuniyetle karşılanır!
+
+(Ayrıntılar için **[Yerelleştirme Kılavuzuna](documentation/localization.md)** bakın.)
+
+---
+
+## 🤝 Katkıda Bulunma
+
+Katkılar, sorun bildirimleri ve özellik istekleri memnuniyetle karşılanır. Lütfen deponun sorunlar (issues) sayfasını kontrol edin.
+
+---
+
+## 📜 Lisans
+
+Bu proje MIT Lisansı altında lisanslanmıştır - ayrıntılar için [LICENSE](LICENSE) dosyasına bakın.
+
+---
+
+## 🙏 Teşekkürler
+
+- Python 3 ve PyQt6 ile oluşturulmuştur.
+- Diğer Linux paket ve AppImage yönetim araçlarından esinlenilmiştir. 

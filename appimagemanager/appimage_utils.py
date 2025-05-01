@@ -170,59 +170,85 @@ class AppImageInstaller:
             return False
 
     def extract_appimage(self):
-        """AppImage dosyasını geçici bir dizine çıkarır ve meta verileri günceller."""
-        try:
-            # --- Ensure AppImage is executable before trying to run it --- 
-            try:
-                current_mode = os.stat(self.appimage_path).st_mode
-                # Check if execute bit is set for the owner (S_IXUSR)
-                if not (current_mode & os.X_OK):
-                    logger.warning(f"AppImage is not executable. Setting +x permission: {self.appimage_path}")
-                    # Add execute permission for owner (read/write/exec), read/exec for others
-                    os.chmod(self.appimage_path, current_mode | 0o111) # Add execute for owner, group, others
-            except Exception as chmod_err:
-                 logger.error(f"Failed to set execute permission on {self.appimage_path}: {chmod_err}")
-                 # Decide if we should proceed or raise an error - let's try proceeding
+        """Extracts the AppImage contents to a temporary directory."""
+        if not self.appimage_path or not os.path.exists(self.appimage_path):
+            logger.error("AppImage path is invalid or does not exist.")
+            return False
 
-            self.temp_dir = tempfile.mkdtemp(prefix="appimage_extract_")
-            logger.info(f"Geçici dizin oluşturuldu: {self.temp_dir}")
-            
-            logger.info(f"AppImage içeriği çıkarılıyor: {self.appimage_path}")
-            cmd = [self.appimage_path, "--appimage-extract"]
-            env = os.environ.copy()
-            env['HOME'] = self.temp_dir 
-            result = subprocess.run(cmd, cwd=self.temp_dir, capture_output=True, text=True, env=env)
-            
-            if result.returncode != 0:
-                logger.warning(f"AppImage çıkarma ilk denemede başarısız oldu (stderr: {result.stderr}), HOME olmadan tekrar deneniyor...")
-                result = subprocess.run(cmd, cwd=self.temp_dir, capture_output=True, text=True)
-                if result.returncode != 0:
-                    logger.error(f"AppImage çıkarma başarısız: {result.stderr}")
-                    self.cleanup()
-                    return False
-            
-            self.extract_dir = os.path.join(self.temp_dir, "squashfs-root")
-            if not os.path.isdir(self.extract_dir):
-                logger.error(f'\'squashfs-root\' dizini bulunamadı: {self.temp_dir}')
-                subdirs = [d for d in os.listdir(self.temp_dir) if os.path.isdir(os.path.join(self.temp_dir, d))]
-                if len(subdirs) == 1:
-                    logger.info(f"Alternatif çıkarılan dizin kullanılıyor: {subdirs[0]}")
-                    self.extract_dir = os.path.join(self.temp_dir, subdirs[0])
-                else:
-                     logger.error(f"Çıkarılan dizin yapısı anlaşılamadı: {self.temp_dir}")
-                     self.cleanup()
-                     return False
-            
-            # Meta verileri güncelle
-            self._update_metadata_from_desktop_file() 
-            
-            # Kurulum dizinini şimdi belirle (isim güncellenmiş olabilir)
-            self.app_install_dir = self._get_app_specific_install_dir()
-            logger.info(f"Uygulama kurulum dizini: {self.app_install_dir}")
-            
-            return True
+        # Ensure the AppImage is executable for extraction
+        if not os.access(self.appimage_path, os.X_OK):
+            logger.warning(f"AppImage {self.appimage_path} is not executable. Attempting to set +x.")
+            try:
+                os.chmod(self.appimage_path, os.stat(self.appimage_path).st_mode | 0o111)
+            except Exception as e:
+                logger.error(f"Failed to make AppImage executable: {e}. Extraction might fail.")
+                # Proceed cautiously, extraction might still work if underlying tools handle it
+
+        # Create a unique temporary directory for extraction
+        # Adding a short uuid ensures multiple installs don't clash easily
+        safe_app_name = sanitize_name(self.app_info.get("name", "temp_app"))
+        extract_parent = os.path.join(config.CONFIG_DIR, "extract_tmp") 
+        self.extract_dir = os.path.join(extract_parent, f"{safe_app_name}_{uuid.uuid4().hex[:8]}")
+        try:
+            os.makedirs(self.extract_dir, exist_ok=True)
+            logger.info(f"Created temporary extraction directory: {self.extract_dir}")
         except Exception as e:
-            logger.error(f"AppImage çıkarma sırasında hata: {e}")
+            logger.error(f"Failed to create temporary directory {self.extract_dir}: {e}")
+            return False
+
+        # Construct the extraction command
+        # Using --appimage-extract as it's the standard way
+        command = [self.appimage_path, "--appimage-extract"]
+        logger.info(f"Attempting extraction with command: {' '.join(command)}")
+
+        try:
+            # Run the extraction command
+            # IMPORTANT: Extraction happens *inside* the temporary directory
+            result = subprocess.run(command, cwd=self.extract_dir, check=True, capture_output=True, text=True)
+            logger.info("AppImage extracted successfully.")
+            logger.debug(f"Extraction Output:\n{result.stdout}")
+            # After successful extraction, find the actual application directory (usually squashfs-root)
+            extracted_content_dir = os.path.join(self.extract_dir, "squashfs-root")
+            if not os.path.isdir(extracted_content_dir):
+                logger.warning(f"Standard 'squashfs-root' directory not found in {self.extract_dir}. Using extract_dir itself.")
+                # Fallback or adjust based on observed behavior if needed
+                # self.app_content_dir = self.extract_dir # Or handle error
+                # For now, let's assume the main content is directly in self.extract_dir if squashfs-root is missing
+                # OR maybe the command failed silently? Check return code again? (check=True handles this)
+                # Let's refine: If squashfs-root is missing, the extraction *likely* failed despite 0 exit code, 
+                # or it's a very unusual AppImage. Treat as failure for now.
+                # Re-check if any directory was created?
+                subdirs = [d for d in os.listdir(self.extract_dir) if os.path.isdir(os.path.join(self.extract_dir, d))]
+                if not subdirs or not os.path.exists(extracted_content_dir):
+                    logger.error("Extraction seemed successful, but 'squashfs-root' is missing. Cannot proceed.")
+                    self.cleanup() # Clean up the failed attempt
+                    return False
+                # else: If other dirs exist but not squashfs-root, log warning but maybe proceed? Risky.
+                
+            # --- Create the marker file inside the extracted content directory --- 
+            marker_path_in_extract = os.path.join(extracted_content_dir, ".aim_managed")
+            try:
+                Path(marker_path_in_extract).touch()
+                logger.debug(f"Created marker file in extracted content: {marker_path_in_extract}")
+                # This file will now be copied during install_files or get_install_commands
+            except Exception as e:
+                # Log error but don't fail the whole process just for the marker
+                logger.warning(f"Failed to create marker file in extraction dir {marker_path_in_extract}: {e}")
+            
+            return True # Extraction successful
+
+        except FileNotFoundError:
+            logger.error(f"Extraction failed: AppImage file not found at {self.appimage_path}")
+            self.cleanup()
+            return False
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Extraction failed with exit code {e.returncode}")
+            logger.error(f"Stderr:\n{e.stderr}")
+            logger.error(f"Stdout:\n{e.stdout}")
+            self.cleanup()
+            return False
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during extraction: {e}", exc_info=True)
             self.cleanup()
             return False
     
@@ -1271,6 +1297,111 @@ def remove_selected_leftovers(paths):
         logger.info(f"Successfully removed {removed_count} leftover item(s).")
         return True, removed_count # Indicate success 
 
+# --- Orphaned Installation Management ---
+
+def find_orphaned_installs():
+    """Scans potential install locations for managed directories not in the DB."""
+    logger.info("Scanning for orphaned installations...")
+    orphans = []
+    potential_parent_dirs = [
+        os.path.join(config.USER_HOME, ".local", "share", "appimagemanager", "apps"),
+        "/opt/appimage-manager/apps" # System-wide location
+    ]
+    
+    # Get known installation directories from the database
+    try:
+        from .db_manager import DBManager # Import locally to avoid circular deps
+        db = DBManager()
+        known_install_dirs = {app.get("app_install_dir") for app in db.get_all_apps() if app.get("app_install_dir")}
+        logger.debug(f"Known install directories from DB: {known_install_dirs}")
+    except Exception as e:
+        logger.error(f"Failed to load database to check for orphans: {e}")
+        return [] # Cannot determine orphans without DB access
+
+    for parent_dir in potential_parent_dirs:
+        if not os.path.isdir(parent_dir):
+            logger.debug(f"Skipping scan for non-existent parent directory: {parent_dir}")
+            continue
+            
+        logger.debug(f"Scanning directory: {parent_dir}")
+        try:
+            for entry in os.scandir(parent_dir):
+                if entry.is_dir():
+                    install_dir_path = entry.path
+                    marker_file = os.path.join(install_dir_path, ".aim_managed")
+                    
+                    # Check if it has our marker file
+                    if os.path.exists(marker_file):
+                        # Check if it's NOT in our database
+                        if install_dir_path not in known_install_dirs:
+                            # Found an orphan!
+                            # Try to guess app name from dir name (remove _ID suffix)
+                            guessed_name = entry.name
+                            # Simple heuristic: remove trailing underscore + hex ID if present
+                            match = re.match(r'^(.*?)_[0-9a-fA-F]{8,}', entry.name)
+                            if match:
+                                guessed_name = match.group(1).replace('_', ' ') # Restore spaces
+                                
+                            logger.info(f"Found orphaned installation: {install_dir_path} (Guessed Name: {guessed_name})")
+                            orphans.append({
+                                "path": install_dir_path,
+                                "guessed_name": guessed_name
+                            })
+                        else:
+                             logger.debug(f"Directory {install_dir_path} has marker but is known.")
+                    else:
+                         logger.debug(f"Directory {install_dir_path} does not have marker.")
+        except OSError as e:
+            logger.warning(f"Could not scan directory {parent_dir}: {e}")
+            
+    logger.info(f"Orphan scan complete. Found {len(orphans)} orphan(s).")
+    return orphans
+
+def remove_orphaned_install(directory_path):
+    """Removes an orphaned installation directory, requesting sudo if needed."""
+    if not directory_path or not os.path.isdir(directory_path):
+        logger.error(f"Cannot remove orphan: Invalid directory path {directory_path}")
+        return False
+
+    # Basic check for marker file as a safety measure
+    marker_file = os.path.join(directory_path, ".aim_managed")
+    if not os.path.exists(marker_file):
+        logger.warning(f"Attempting to remove orphan at {directory_path}, but marker file is missing! Proceeding with caution.")
+
+    logger.info(f"Attempting to remove orphaned installation directory: {directory_path}")
+    
+    # Check if root is required (mainly for /opt)
+    requires_root = not os.access(os.path.dirname(directory_path), os.W_OK)
+    logger.debug(f"Root required for removal of {directory_path}? {requires_root}")
+
+    try:
+        if requires_root:
+            # Use sudo_helper to remove the directory
+            from . import sudo_helper # Import locally
+            command = f"rm -rf \"{directory_path}\""
+            logger.info(f"Using sudo helper to execute: {command}")
+            success, output = sudo_helper.execute_commands_with_sudo([command])
+            if not success:
+                logger.error(f"Failed to remove orphan directory using sudo: {output}")
+                return False
+        else:
+            # Remove using standard shutil
+            shutil.rmtree(directory_path)
+            logger.info(f"Successfully removed orphan directory (non-root): {directory_path}")
+        
+        # TODO: Optionally, try to find and remove related .desktop/icon files? 
+        # This is difficult without the original app_info.
+        # We could try matching based on the guessed name, but it's risky.
+        # For now, just remove the main directory.
+        
+        return True
+    except (PermissionError, OSError) as e:
+        logger.error(f"Permission or OS error removing orphan {directory_path}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error removing orphan {directory_path}: {e}", exc_info=True)
+        return False
+
 # --- Helper function for finding desktop file ---
 def _find_desktop_file(extract_dir):
     """Finds the main .desktop file within an extracted directory."""
@@ -1672,4 +1803,114 @@ def remove_registered_app_artifacts(app_info):
 
 # ... (check_system_compatibility and other existing functions) ...
 # ... (find_leftovers and remove_selected_leftovers) ...
+
+# --- Leftover/Untracked Installation Management ---
+
+def find_leftover_installs():
+    """Scans potential install locations for installations not tracked in the DB."""
+    logger.info("Scanning for leftover/untracked installations...")
+    leftover_installs = []
+    potential_parent_dirs = [
+        os.path.join(config.USER_HOME, ".local", "share", "appimagemanager", "apps"),
+        "/opt/appimage-manager/apps" # System-wide location
+    ]
+    marker_filename = ".aim_managed"
+
+    # Get known installation directories from the database
+    try:
+        from .db_manager import DBManager # Import locally
+        db = DBManager()
+        # Use a set for efficient lookup
+        known_install_dirs = {app.get("app_install_dir") for app in db.get_all_apps() if app.get("app_install_dir")}
+        logger.debug(f"Known install directories from DB: {known_install_dirs}")
+    except Exception as e:
+        logger.error(f"Failed to load database to check for leftovers: {e}")
+        return [] # Cannot determine leftovers without DB access
+
+    for parent_dir in potential_parent_dirs:
+        if not os.path.isdir(parent_dir):
+            logger.debug(f"Skipping scan for non-existent parent directory: {parent_dir}")
+            continue
+            
+        logger.debug(f"Scanning directory for leftovers: {parent_dir}")
+        try:
+            for entry in os.scandir(parent_dir):
+                # We are only interested in directories directly under the /apps folder
+                if entry.is_dir():
+                    install_dir_path = entry.path
+                    
+                    # Skip if it's known by the database
+                    if install_dir_path in known_install_dirs:
+                        logger.debug(f"Directory {install_dir_path} is known by DB, skipping.")
+                        continue
+
+                    # Directory exists and is NOT in the database. Now check for marker.
+                    marker_file = os.path.join(install_dir_path, marker_filename)
+                    has_marker = os.path.exists(marker_file)
+                    
+                    # Try to guess app name from dir name
+                    guessed_name = entry.name
+                    match = re.match(r'^(.*?)_[0-9a-fA-F]{8,}', entry.name)
+                    if match:
+                        guessed_name = match.group(1).replace('_', ' ')
+                        
+                    install_type = "marked_leftover" if has_marker else "unmarked_remnant"
+                    logger.info(f"Found leftover installation ({install_type}): {install_dir_path} (Guessed Name: {guessed_name})")
+                    leftover_installs.append({
+                        "path": install_dir_path,
+                        "guessed_name": guessed_name,
+                        "type": install_type # Store the type
+                    })
+                        
+        except OSError as e:
+            logger.warning(f"Could not scan directory {parent_dir}: {e}")
+            
+    logger.info(f"Leftover scan complete. Found {len(leftover_installs)} item(s).")
+    return leftover_installs
+
+def remove_leftover_install(directory_path):
+    """Removes a leftover/untracked installation directory, requesting sudo if needed."""
+    if not directory_path or not os.path.isdir(directory_path):
+        logger.error(f"Cannot remove leftover: Invalid directory path {directory_path}")
+        return False
+
+    marker_filename = ".aim_managed"
+    marker_file = os.path.join(directory_path, marker_filename)
+    if not os.path.exists(marker_file):
+        # Changed from warning to info, as we now expect unmarked remnants
+        logger.info(f"Removing unmarked remnant at {directory_path}.")
+    else:
+        logger.info(f"Removing marked leftover installation directory: {directory_path}")
+
+    # Check if root is required (mainly for /opt or restricted user dirs)
+    requires_root = not os.access(os.path.dirname(directory_path), os.W_OK)
+    # Also check if we can write to the directory itself (needed for non-root removal)
+    if not requires_root and not os.access(directory_path, os.W_OK):
+        logger.warning(f"Directory {directory_path} exists but is not writable without root.")
+        requires_root = True 
+        
+    logger.debug(f"Root required for removal of {directory_path}? {requires_root}")
+
+    try:
+        if requires_root:
+            from . import sudo_helper # Import locally
+            command = f"rm -rf \"{directory_path}\""
+            logger.info(f"Using sudo helper to execute: {command}")
+            success, output = sudo_helper.execute_commands_with_sudo([command])
+            if not success:
+                logger.error(f"Failed to remove leftover directory using sudo: {output}")
+                return False
+        else:
+            shutil.rmtree(directory_path)
+            logger.info(f"Successfully removed leftover directory (non-root): {directory_path}")
+        
+        # TODO: Optionally remove related .desktop/icon files (still difficult)
+        
+        return True
+    except (PermissionError, OSError) as e:
+        logger.error(f"Permission or OS error removing leftover {directory_path}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error removing leftover {directory_path}: {e}", exc_info=True)
+        return False
 

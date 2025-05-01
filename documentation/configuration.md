@@ -84,7 +84,7 @@ Let's break that down:
 *   `install_location`: If the app was **installed**, this is the folder where its contents were unpacked. If it was only **registered**, this might be empty or `null`.
 *   `install_date`: When you added the app.
 *   `management_type`: Very important! Tells how the app is being handled:
-    *   `"installed"`: Means the app's contents were unpacked and put into system folders.
-    *   `"registered"`: Means the original AppImage file is being used, and the manager just created menu shortcuts/icons.
+    *   `"installed"`: Means the app's contents were unpacked and put into system folders (either user-local, system-wide, or custom). Corresponds to the "Install (Copy files...)", "System-wide", or "Custom Location" options.
+    *   `"registered"`: Means the original AppImage file is being used, and the manager just created menu shortcuts/icons. Corresponds to the "Add to Manager (Keep Original)" option.
 
 The "Manage Apps" page reads this file to show you the list. When you install or uninstall apps, AppImage Manager updates this file automatically. 

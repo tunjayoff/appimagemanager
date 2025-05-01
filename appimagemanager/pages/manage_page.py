@@ -47,12 +47,14 @@ class ManagePage(QWidget):
         # --- Toolbar ---
         toolbar_layout = QHBoxLayout()
         self.refresh_button = QPushButton(QIcon.fromTheme("view-refresh"), translator.get_text("Refresh List"))
+        self.scan_leftovers_button = QPushButton(QIcon.fromTheme("edit-find"), translator.get_text("Scan for Leftovers"))
         self.uninstall_button = QPushButton(QIcon.fromTheme("edit-delete"), translator.get_text("Uninstall Selected"))
         self.run_button = QPushButton(QIcon.fromTheme("media-playback-start"), translator.get_text("Run Application"))
         self.run_button.setEnabled(False) # Disable initially
         self.uninstall_button.setEnabled(False) # Disable initially
         
         toolbar_layout.addWidget(self.refresh_button)
+        toolbar_layout.addWidget(self.scan_leftovers_button)
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.run_button)
         toolbar_layout.addWidget(self.uninstall_button)
@@ -107,6 +109,7 @@ class ManagePage(QWidget):
 
         # --- Connect Signals ---
         self.refresh_button.clicked.connect(self.refresh_app_list)
+        self.scan_leftovers_button.clicked.connect(self.scan_for_leftover_installs)
         self.uninstall_button.clicked.connect(self.uninstall_selected_app)
         self.run_button.clicked.connect(self.run_selected_app)
         self.app_table.itemSelectionChanged.connect(self.update_button_states)
@@ -619,6 +622,7 @@ class ManagePage(QWidget):
         
         # Update buttons
         self.refresh_button.setText(translator.get_text("Refresh List"))
+        self.scan_leftovers_button.setText(translator.get_text("Scan for Leftovers"))
         self.uninstall_button.setText(translator.get_text("Uninstall Selected"))
         self.run_button.setText(translator.get_text("Run Application"))
         
@@ -644,6 +648,65 @@ class ManagePage(QWidget):
         # Update status label
         if not self.progress_bar.isVisible():
             self.status_label.setText(translator.get_text("Ready"))
+            
+        # Force update for the potentially problematic button
+        self.scan_leftovers_button.setText(translator.get_text("Scan for Leftovers"))
+
+    def scan_for_leftover_installs(self):
+        """Scans for leftover/untracked installations and prompts the user to remove them."""
+        logger.info("Starting leftover installation scan...")
+        self.show_loading(True, translator.get_text("Scanning for leftovers..."))
+        try:
+            leftover_installs = appimage_utils.find_leftover_installs()
+            self.show_loading(False)
+            
+            if not leftover_installs:
+                logger.info("No leftover installations found.")
+                QMessageBox.information(self, 
+                                      translator.get_text("Leftover Scan Complete"),
+                                      translator.get_text("No leftover installations found."))
+            else:
+                logger.info(f"Found {len(leftover_installs)} leftover installation(s).")
+                dialog = LeftoverInstallDialog(leftover_installs, self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    selected_to_remove = dialog.get_selected_paths()
+                    if not selected_to_remove:
+                         logger.info("User accepted leftover dialog but selected no items to remove.")
+                         return
+                         
+                    logger.info(f"User chose to remove {len(selected_to_remove)} leftover installation(s).")
+                    self.show_loading(True, translator.get_text("Removing leftovers..."))
+                    
+                    success_count = 0
+                    fail_count = 0
+                    for path in selected_to_remove:
+                        if appimage_utils.remove_leftover_install(path):
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                            
+                    self.show_loading(False)
+                    result_message = ""
+                    if success_count > 0:
+                         result_message += translator.get_text("Successfully removed {count} leftover installation(s).").format(count=success_count)
+                    if fail_count > 0:
+                        if result_message: result_message += "\n"
+                        result_message += translator.get_text("Failed to remove {count} leftover installation(s). Check logs for details.").format(count=fail_count)
+                    
+                    if fail_count > 0:
+                        QMessageBox.warning(self, translator.get_text("Leftover Removal Result"), result_message)
+                    elif success_count > 0:
+                        QMessageBox.information(self, translator.get_text("Leftover Removal Result"), result_message)
+                        
+                else:
+                    logger.info("User cancelled leftover removal dialog.")
+
+        except Exception as e:
+            logger.error(f"Error during leftover scan: {e}", exc_info=True)
+            self.show_loading(False, translator.get_text("Error during scan."))
+            QMessageBox.critical(self, 
+                               translator.get_text("Error"), 
+                               translator.get_text("An error occurred while scanning for leftovers. Check logs."))
 
 # --- Leftover Files Dialog ---
 
@@ -708,6 +771,77 @@ class LeftoverDialog(QDialog):
             item = self.list_widget.item(i)
             if item.checkState() == Qt.CheckState.Checked:
                 selected_paths.append(item.text())
+        return selected_paths
+
+# --- Orphaned Installations Dialog ---
+
+class LeftoverInstallDialog(QDialog):
+    """Dialog to show leftover/untracked installation directories and allow user to select for deletion."""
+    def __init__(self, leftover_installs, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(translator.get_text("Leftover Installations Found"))
+        self.setMinimumWidth(600)
+        self.leftover_installs = leftover_installs
+
+        layout = QVBoxLayout(self)
+
+        info_label = QLabel(translator.get_text(
+            "The following directories appear to be AppImage Manager installations but are not tracked in the database. "
+            "They might be old remnants or from a cleared database. "
+            "Marked items (.aim_managed file found) are almost certainly leftovers. Unmarked items are likely remnants but require more caution. "
+            "Select the ones you want to permanently remove:"
+        ))
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+
+        for item_info in self.leftover_installs:
+            type_indicator = "(Marked)" if item_info['type'] == 'marked_leftover' else "(Unmarked)"
+            display_text = f"{item_info['guessed_name']} {type_indicator} (Path: {item_info['path']})"
+            item = QListWidgetItem(display_text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, item_info['path'])
+            self.list_widget.addItem(item)
+
+        layout.addWidget(self.list_widget)
+
+        button_layout = QHBoxLayout()
+        select_all_button = QPushButton(translator.get_text("Select All"))
+        deselect_all_button = QPushButton(translator.get_text("Deselect All"))
+        button_layout.addWidget(select_all_button)
+        button_layout.addWidget(deselect_all_button)
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Reset
+        )
+        remove_button = button_box.addButton(translator.get_text("Remove Selected Leftovers"), QDialogButtonBox.ButtonRole.AcceptRole)
+        layout.addWidget(button_box)
+
+        button_box.rejected.connect(self.reject)
+        remove_button.clicked.connect(self.accept)
+        select_all_button.clicked.connect(self.select_all)
+        deselect_all_button.clicked.connect(self.deselect_all)
+
+    def select_all(self):
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Checked)
+
+    def deselect_all(self):
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Unchecked)
+
+    def get_selected_paths(self):
+        """Returns a list of paths corresponding to checked items."""
+        selected_paths = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                selected_paths.append(item.data(Qt.ItemDataRole.UserRole))
         return selected_paths
 
 # --- Logger Setup (Example - Adapt as needed) ---
