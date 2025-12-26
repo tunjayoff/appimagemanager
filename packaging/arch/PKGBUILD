@@ -10,7 +10,7 @@ depends=(
     'python>=3.8'
     'python-pyqt6'
     'python-packaging'
-    'libfuse2'
+    'fuse2'
     'gtk-update-icon-cache'
     'desktop-file-utils'
 )
