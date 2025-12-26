@@ -205,7 +205,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🇹🇷 Türkçe
 
-AppImage Manager, Linux sistemlerinde AppImage uygulamalarını yönetmek için güçlü ve kullanıcı dostu bir çözümdür. Ubuntu 24.04 ve diğer Debian tabanlı dağıtımlar için tasarlanmıştır.
+AppImage Manager, Linux sistemlerinde AppImage uygulamalarını yönetmek için güçlü ve kullanıcı dostu bir çözümdür. Arch Linux, Debian/Ubuntu ve diğer Linux dağıtımlarıyla uyumludur.
 
 ### Özellikler
 
