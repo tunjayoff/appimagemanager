@@ -15,6 +15,95 @@ from .utils import sanitize_name # <-- Import from new utils module
 
 logger = logging.getLogger(__name__)
 
+# --- Qt/Wayland Compatibility ---
+
+def is_qt_app_needing_xcb_fallback(appimage_path=None, install_dir=None):
+    """Detects if an AppImage is a Qt application that may need XCB (X11) fallback.
+    
+    Some older Qt applications don't support Wayland properly and need to run
+    with QT_QPA_PLATFORM=xcb environment variable.
+    
+    Args:
+        appimage_path (str): Path to the AppImage file.
+        install_dir (str): Path to the extracted/installed app directory.
+        
+    Returns:
+        bool: True if the app likely needs XCB fallback.
+    """
+    qt_indicators = []
+    
+    # Check in install directory for Qt libraries
+    if install_dir and os.path.isdir(install_dir):
+        search_paths = [
+            os.path.join(install_dir, "usr/lib"),
+            os.path.join(install_dir, "lib"),
+            os.path.join(install_dir, "app"),
+            install_dir
+        ]
+        
+        for search_path in search_paths:
+            if not os.path.isdir(search_path):
+                continue
+            try:
+                for root, dirs, files in os.walk(search_path):
+                    for f in files:
+                        f_lower = f.lower()
+                        # Check for Qt5 libraries (Qt6 generally has better Wayland support)
+                        if 'libqt5' in f_lower or 'qt5' in f_lower:
+                            qt_indicators.append(('qt5_lib', os.path.join(root, f)))
+                        # Check for old Qt platform plugins directory
+                        if 'platforms' in dirs or 'xcbglintegrations' in dirs:
+                            # Look for wayland plugin
+                            platforms_dir = os.path.join(root, 'platforms')
+                            if os.path.isdir(platforms_dir):
+                                platform_files = os.listdir(platforms_dir)
+                                has_wayland = any('wayland' in pf.lower() for pf in platform_files)
+                                has_xcb = any('xcb' in pf.lower() for pf in platform_files)
+                                if has_xcb and not has_wayland:
+                                    qt_indicators.append(('no_wayland_plugin', platforms_dir))
+                    # Don't recurse too deep
+                    if root.count(os.sep) - search_path.count(os.sep) > 3:
+                        break
+            except (PermissionError, OSError) as e:
+                logger.debug(f"Error scanning {search_path} for Qt indicators: {e}")
+                continue
+    
+    # Check AppImage filename for Qt hints
+    if appimage_path:
+        basename_lower = os.path.basename(appimage_path).lower()
+        # Some apps include Qt version in filename
+        if 'qt5' in basename_lower:
+            qt_indicators.append(('filename_qt5', appimage_path))
+    
+    if qt_indicators:
+        logger.debug(f"Qt indicators found: {qt_indicators}")
+        return True
+    
+    return False
+
+def build_exec_with_qt_fallback(exec_path, needs_fallback=False):
+    """Wraps an Exec path with Qt XCB fallback if needed.
+    
+    Args:
+        exec_path (str): The original executable path.
+        needs_fallback (bool): Whether to add the fallback.
+        
+    Returns:
+        str: The Exec command, possibly wrapped with env QT_QPA_PLATFORM=xcb.
+    """
+    if not exec_path:
+        return exec_path
+    
+    # Don't double-wrap if already has the env prefix
+    if 'QT_QPA_PLATFORM' in exec_path:
+        return exec_path
+    
+    if needs_fallback:
+        # Use env command to set the environment variable
+        return f"env QT_QPA_PLATFORM=xcb {exec_path}"
+    
+    return exec_path
+
 # --- Desktop Database ---
 
 def update_desktop_database(desktop_dir):
@@ -99,7 +188,8 @@ def copy_app_icons(final_icon_path, app_install_dir, app_info):
             logger.debug(f"Copying primary icon to standard location: {final_icon_path} -> {target_icon_path}")
             shutil.copy2(final_icon_path, target_icon_path)
             logger.info(f"Primary icon copied to: {target_icon_path}")
-            copied_icon_primary_path_or_name = icon_name # Use name for desktop file
+            # Return the absolute path to ensure desktop file can find it
+            copied_icon_primary_path_or_name = target_icon_path
             icons_copied = True
         except Exception as e:
             logger.error(f"Failed to copy primary icon to standard location: {e}")
@@ -244,7 +334,20 @@ def _update_desktop_file_content(desktop_file_path, exec_target, icon_name_or_pa
                 # Process lines within [Desktop Entry]
                 if strip_line.startswith("Exec="):
                     if exec_target:
-                        new_line = f"Exec={exec_target}\n"
+                        # exec_target may already include %U or other args, preserve them
+                        # Extract just the args portion from the original line if needed
+                        original_args = ""
+                        if "%" in strip_line:
+                            parts = strip_line.split("%", 1)
+                            if len(parts) > 1:
+                                original_args = " %" + parts[1]
+                        
+                        # Build final exec line
+                        final_exec = exec_target
+                        if original_args and original_args not in exec_target:
+                            final_exec = exec_target + original_args
+                        
+                        new_line = f"Exec={final_exec}\n"
                         f.write(new_line)
                         logger.debug(f"Updated Exec line: '{strip_line}' -> '{new_line.strip()}'")
                         updated = True
@@ -285,7 +388,7 @@ def _update_desktop_file_content(desktop_file_path, exec_target, icon_name_or_pa
         logger.error(traceback.format_exc())
         return False
 
-def register_appimage_integration(appimage_path, app_info, extracted_icon_path=None):
+def register_appimage_integration(appimage_path, app_info, extracted_icon_path=None, extract_dir=None):
     """Creates symlink and desktop file for a registered AppImage.
 
     Args:
@@ -293,6 +396,7 @@ def register_appimage_integration(appimage_path, app_info, extracted_icon_path=N
         app_info (dict): Dictionary containing app metadata (name, version, icon_name etc.).
         extracted_icon_path (str, optional): Path to an icon file extracted from the AppImage.
                                             Defaults to None.
+        extract_dir (str, optional): Path to extracted AppImage contents for Qt detection.
                                             
     Returns:
         tuple: (path_to_symlink_or_None, path_to_desktop_file_or_None)
@@ -340,13 +444,20 @@ def register_appimage_integration(appimage_path, app_info, extracted_icon_path=N
         
         logger.debug(f"Creating registration desktop file: {desktop_file_path}")
         
+        # Check if this is a Qt app that needs XCB fallback for Wayland compatibility
+        needs_qt_fallback = is_qt_app_needing_xcb_fallback(appimage_path=appimage_path, install_dir=extract_dir)
+        exec_command = build_exec_with_qt_fallback(bin_link_path, needs_qt_fallback)
+        
+        if needs_qt_fallback:
+            logger.info(f"Detected Qt app without Wayland support, adding XCB fallback for '{app_name}'")
+        
         # Basic .desktop file content
         desktop_content = f"""[Desktop Entry]
 Version=1.1
 Type=Application
 Name={app_name}
 Comment={app_info.get('comment', '')}
-Exec={bin_link_path} %U
+Exec={exec_command} %U
 Icon={icon_name}
 Categories={app_info.get('categories', 'Utility;')}
 Terminal=false
@@ -377,7 +488,7 @@ StartupNotify=true
         
     return bin_link_path, desktop_file_path
 
-def create_desktop_entry(final_desktop_path, desktop_link_dir, bin_symlink_target, icon_name_or_path):
+def create_desktop_entry(final_desktop_path, desktop_link_dir, bin_symlink_target, icon_name_or_path, install_dir=None):
     """Copies the original .desktop file and updates its content.
     
     Args:
@@ -385,6 +496,7 @@ def create_desktop_entry(final_desktop_path, desktop_link_dir, bin_symlink_targe
         desktop_link_dir (str): Target directory (e.g., ~/.local/share/applications).
         bin_symlink_target (str): The target path for the Exec= line.
         icon_name_or_path (str): The icon name or path for the Icon= line.
+        install_dir (str, optional): Installation directory for Qt detection.
 
     Returns:
         str: Path to the created/updated desktop file in the target directory, or None on failure.
@@ -402,6 +514,13 @@ def create_desktop_entry(final_desktop_path, desktop_link_dir, bin_symlink_targe
     desktop_filename = os.path.basename(final_desktop_path)
     target_desktop_path = os.path.join(desktop_link_dir, desktop_filename)
     
+    # Check if this is a Qt app that needs XCB fallback
+    needs_qt_fallback = is_qt_app_needing_xcb_fallback(install_dir=install_dir)
+    exec_command = build_exec_with_qt_fallback(bin_symlink_target, needs_qt_fallback)
+    
+    if needs_qt_fallback:
+        logger.info(f"Detected Qt app without Wayland support, adding XCB fallback")
+    
     try:
         # Ensure target directory exists
         os.makedirs(desktop_link_dir, exist_ok=True)
@@ -416,8 +535,8 @@ def create_desktop_entry(final_desktop_path, desktop_link_dir, bin_symlink_targe
         shutil.copy2(final_desktop_path, target_desktop_path)
         logger.info(f"Desktop file copied to: {target_desktop_path}")
         
-        # Update the COPIED desktop file
-        if not _update_desktop_file_content(target_desktop_path, bin_symlink_target, icon_name_or_path):
+        # Update the COPIED desktop file with the exec command (possibly with XCB fallback)
+        if not _update_desktop_file_content(target_desktop_path, exec_command, icon_name_or_path):
             logger.error("Failed to update the copied desktop file content.")
             # Return the path anyway, it might partially work
         

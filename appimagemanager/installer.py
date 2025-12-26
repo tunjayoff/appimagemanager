@@ -16,6 +16,66 @@ from .utils import sanitize_name
 
 logger = logging.getLogger(__name__)
 
+def _run_subprocess_non_blocking(cmd, cwd=None, timeout=60, env=None, check_interval=0.1):
+    """Run a subprocess without blocking the UI thread.
+    
+    Uses Popen with polling and QApplication.processEvents() to keep UI responsive
+    during long-running operations like AppImage extraction.
+    
+    Args:
+        cmd: Command list to execute
+        cwd: Working directory
+        timeout: Maximum time to wait (seconds)
+        env: Environment variables
+        check_interval: How often to check process status (seconds)
+        
+    Returns:
+        tuple: (return_code, stdout, stderr) or (None, None, error_msg) on timeout
+    """
+    try:
+        # Try to import QApplication for UI responsiveness
+        from PyQt6.QtWidgets import QApplication
+        has_qt = True
+    except ImportError:
+        has_qt = False
+    
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env
+        )
+        
+        start_time = time.time()
+        while True:
+            # Check if process has completed
+            return_code = process.poll()
+            if return_code is not None:
+                # Process completed
+                stdout, stderr = process.communicate()
+                return return_code, stdout.decode('utf-8', errors='replace'), stderr.decode('utf-8', errors='replace')
+            
+            # Check timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                process.kill()
+                process.wait()
+                return None, None, f"Process timed out after {timeout}s"
+            
+            # Keep UI responsive
+            if has_qt:
+                app = QApplication.instance()
+                if app:
+                    app.processEvents()
+            
+            # Small sleep to avoid busy-waiting
+            time.sleep(check_interval)
+            
+    except Exception as e:
+        return None, None, str(e)
+
 class AppImageInstaller:
     def __init__(self, appimage_path, install_mode="user", custom_install_path=None):
         logger.debug(f"Entering __init__ for {appimage_path}, mode={install_mode}, custom_path={custom_install_path}")
@@ -226,43 +286,117 @@ class AppImageInstaller:
         else:
             # Look for the executable in different possible locations
             exec_relative = self.app_info['exec_relative']
+            app_name_sanitized = self.app_info.get('name_sanitized', '').lower()
             
-            # Possible paths for executable:
-            # 1. Direct in app dir (legacy support)
-            direct_path = os.path.join(self.app_install_dir, exec_relative)
-            
-            # 2. In usr/bin (common structure)
+            # Possible paths for executable (in priority order):
+            # 1. In usr/bin (common structure for traditional AppImages)
             usr_bin_path = os.path.join(self.app_install_dir, "usr/bin", exec_relative)
             
-            # 3. Check for AppRun.wrapped which might point to the correct executable
+            # 2. In app/ directory (common for Electron apps)
+            app_dir_path = os.path.join(self.app_install_dir, "app", app_name_sanitized) if app_name_sanitized else None
+            
+            # 3. Direct in app dir (legacy support - AppRun)
+            direct_path = os.path.join(self.app_install_dir, exec_relative)
+            
+            # 4. Check for AppRun.wrapped which might point to the correct executable
             apprun_wrapped_path = os.path.join(self.app_install_dir, "AppRun.wrapped")
             
-            # Decide which path to use by checking existence (for existing installations)
-            # or using the most likely location based on AppImage structure
-            if os.path.exists(self.app_install_dir) and os.path.exists(usr_bin_path):
-                self.final_executable_path = usr_bin_path
-                logger.debug(f"Found executable in usr/bin: {self.final_executable_path}")
-            elif os.path.exists(self.app_install_dir) and os.path.exists(direct_path):
-                self.final_executable_path = direct_path
-                logger.debug(f"Found executable directly in app dir: {self.final_executable_path}")
-            elif os.path.exists(self.app_install_dir) and os.path.islink(apprun_wrapped_path):
-                # Read where the symlink points to and use that path
+            # Helper function to check if a file is a real executable binary (not a shell script for desktop integration)
+            def is_real_executable(path):
+                if not path or not os.path.exists(path) or not os.path.isfile(path):
+                    return False
+                # Check if it's executable
+                if not os.access(path, os.X_OK):
+                    return False
+                # Check if it's a shell script (AppRun integration scripts often are)
                 try:
-                    wrapped_target = os.readlink(apprun_wrapped_path)
-                    target_path = os.path.normpath(os.path.join(self.app_install_dir, wrapped_target))
-                    if os.path.exists(target_path):
-                        self.final_executable_path = target_path
-                        logger.debug(f"Found executable via AppRun.wrapped symlink: {self.final_executable_path}")
-                    else:
-                        logger.warning(f"AppRun.wrapped points to non-existent path: {wrapped_target}")
-                        self.final_executable_path = usr_bin_path  # Default to usr/bin path
-                except (OSError, IOError) as e:
-                    logger.warning(f"Failed to read AppRun.wrapped symlink: {e}")
-                    self.final_executable_path = usr_bin_path  # Default to usr/bin path
-            else:
-                # For new installations, prefer usr/bin as it's the most common location
-                self.final_executable_path = usr_bin_path
-                logger.debug(f"Using default usr/bin location for executable: {self.final_executable_path}")
+                    with open(path, 'rb') as f:
+                        header = f.read(128)
+                        # Check for shell script shebang
+                        if header.startswith(b'#!/'):
+                            # This is likely a shell script, check if it's an integration script
+                            if b'desktop' in header.lower() or b'appimage' in header.lower():
+                                return False  # Skip integration scripts
+                        # ELF binary
+                        if header.startswith(b'\x7fELF'):
+                            return True
+                        # Could be a script that actually runs the app
+                        return True
+                except (IOError, OSError):
+                    return False
+                return True
+            
+            # Decide which path to use by checking existence
+            self.final_executable_path = None
+            
+            if os.path.exists(self.app_install_dir):
+                # Priority 1: Check usr/bin
+                if os.path.exists(usr_bin_path) and is_real_executable(usr_bin_path):
+                    self.final_executable_path = usr_bin_path
+                    logger.debug(f"Found executable in usr/bin: {self.final_executable_path}")
+                
+                # Priority 2: Check app/ directory (Electron apps)
+                elif app_dir_path and os.path.exists(app_dir_path) and is_real_executable(app_dir_path):
+                    self.final_executable_path = app_dir_path
+                    logger.debug(f"Found executable in app/ (Electron): {self.final_executable_path}")
+                
+                # Priority 3: Search app/ directory for any executable matching app name
+                elif os.path.isdir(os.path.join(self.app_install_dir, "app")):
+                    app_subdir = os.path.join(self.app_install_dir, "app")
+                    for item in os.listdir(app_subdir):
+                        item_path = os.path.join(app_subdir, item)
+                        if os.path.isfile(item_path) and is_real_executable(item_path):
+                            # Check if the name matches approximately
+                            item_lower = item.lower()
+                            if app_name_sanitized and (app_name_sanitized in item_lower or item_lower in app_name_sanitized):
+                                self.final_executable_path = item_path
+                                logger.debug(f"Found executable in app/ by name match: {self.final_executable_path}")
+                                break
+                            # Or just take the first ELF binary found in app/
+                            try:
+                                with open(item_path, 'rb') as f:
+                                    if f.read(4) == b'\x7fELF':
+                                        self.final_executable_path = item_path
+                                        logger.debug(f"Found ELF executable in app/: {self.final_executable_path}")
+                                        break
+                            except (IOError, OSError):
+                                pass
+                
+                # Priority 4: Check AppRun.wrapped symlink
+                if not self.final_executable_path and os.path.islink(apprun_wrapped_path):
+                    try:
+                        wrapped_target = os.readlink(apprun_wrapped_path)
+                        target_path = os.path.normpath(os.path.join(self.app_install_dir, wrapped_target))
+                        if os.path.exists(target_path) and is_real_executable(target_path):
+                            self.final_executable_path = target_path
+                            logger.debug(f"Found executable via AppRun.wrapped symlink: {self.final_executable_path}")
+                    except (OSError, IOError) as e:
+                        logger.warning(f"Failed to read AppRun.wrapped symlink: {e}")
+                
+                # Priority 5: Direct path (AppRun) - only if it's a real executable
+                if not self.final_executable_path and os.path.exists(direct_path) and is_real_executable(direct_path):
+                    self.final_executable_path = direct_path
+                    logger.debug(f"Found executable directly in app dir: {self.final_executable_path}")
+            
+            # Fallback: If nothing found and directory doesn't exist yet (new installation)
+            if not self.final_executable_path:
+                # For new installations, try to determine based on app structure in extract_dir
+                if self.extract_dir and os.path.isdir(self.extract_dir):
+                    # Check extract_dir for app/ structure
+                    extract_app_dir = os.path.join(self.extract_dir, "app")
+                    if os.path.isdir(extract_app_dir):
+                        for item in os.listdir(extract_app_dir):
+                            item_path = os.path.join(extract_app_dir, item)
+                            if os.path.isfile(item_path) and is_real_executable(item_path):
+                                # Use the relative path from install dir
+                                self.final_executable_path = os.path.join(self.app_install_dir, "app", item)
+                                logger.debug(f"Determined executable from extract (app/): {self.final_executable_path}")
+                                break
+                
+                # Ultimate fallback: usr/bin path
+                if not self.final_executable_path:
+                    self.final_executable_path = usr_bin_path
+                    logger.debug(f"Using default usr/bin location for executable: {self.final_executable_path}")
             
             logger.debug(f"Calculated final executable path: {self.final_executable_path}")
 
@@ -594,7 +728,8 @@ class AppImageInstaller:
                 self.final_desktop_path, 
                 self.desktop_link_dir, 
                 self.bin_symlink_target, 
-                icon_for_desktop 
+                icon_for_desktop,
+                install_dir=self.app_install_dir  # For Qt detection
             )
             logger.debug(f"create_desktop_entry result: {created_desktop_path_result}")
             
@@ -734,35 +869,54 @@ class AppImageInstaller:
         try:
             logger.debug("Attempting selective desktop file extraction...")
             selective_extract_command = [self.appimage_path, f"--appimage-extract=*.desktop"]
-            result_selective = subprocess.run(selective_extract_command, cwd=meta_extract_dir, check=False, 
-                                             capture_output=True, text=True, timeout=20, env=extract_env)
             
-            logger.debug(f"Selective extract result code: {result_selective.returncode}")
-            if result_selective.returncode == 0 and os.path.isdir(squashfs_root):
-                logger.debug("Selective desktop file extraction command succeeded.")
-                for root, _, files in os.walk(squashfs_root):
-                    for file in files: 
-                        if file.lower().endswith(".desktop"):
-                            found_desktop_file = os.path.join(root, file)
-                            logger.debug(f"Found desktop file via selective extract: {found_desktop_file}")
-                            self.extracted_desktop_path = found_desktop_file
-                            break # Inner loop
-                    if found_desktop_file: break # Outer loop
-                if not found_desktop_file:
-                    logger.warning("Selective extract command ok, but no .desktop file found inside.")
+            # Use non-blocking extraction to keep UI responsive
+            return_code, stdout, stderr = _run_subprocess_non_blocking(
+                selective_extract_command, 
+                cwd=meta_extract_dir, 
+                timeout=60,  # 60 seconds for selective extraction
+                env=extract_env
+            )
+            
+            if return_code is None:
+                # Timeout or error
+                logger.warning(f"Selective desktop extraction failed: {stderr}")
             else:
-                stderr_out = result_selective.stderr.strip() if result_selective.stderr else "(no stderr)"
-                logger.warning(f"Selective desktop extraction failed (Code: {result_selective.returncode}). Stderr: {stderr_out}")
+                logger.debug(f"Selective extract result code: {return_code}")
+                if return_code == 0 and os.path.isdir(squashfs_root):
+                    logger.debug("Selective desktop file extraction command succeeded.")
+                    for root, _, files in os.walk(squashfs_root):
+                        for file in files: 
+                            if file.lower().endswith(".desktop"):
+                                found_desktop_file = os.path.join(root, file)
+                                logger.debug(f"Found desktop file via selective extract: {found_desktop_file}")
+                                self.extracted_desktop_path = found_desktop_file
+                                break # Inner loop
+                        if found_desktop_file: break # Outer loop
+                    if not found_desktop_file:
+                        logger.warning("Selective extract command ok, but no .desktop file found inside.")
+                else:
+                    stderr_out = stderr.strip() if stderr else "(no stderr)"
+                    logger.warning(f"Selective desktop extraction failed (Code: {return_code}). Stderr: {stderr_out}")
             
             if not found_desktop_file:
                 logger.info("Selective desktop extraction insufficient, attempting full extract for metadata...")
                 if os.path.exists(squashfs_root): shutil.rmtree(squashfs_root) 
                 
                 full_extract_command = [self.appimage_path, "--appimage-extract"]
-                result_full = subprocess.run(full_extract_command, cwd=meta_extract_dir, check=False, 
-                                            capture_output=True, text=True, timeout=90, env=extract_env)
-                 
-                if result_full.returncode == 0 and os.path.isdir(squashfs_root):
+                
+                # Use non-blocking full extraction
+                return_code_full, stdout_full, stderr_full = _run_subprocess_non_blocking(
+                    full_extract_command, 
+                    cwd=meta_extract_dir, 
+                    timeout=300,  # 5 minutes for full extraction of large AppImages
+                    env=extract_env
+                )
+                
+                if return_code_full is None:
+                    extraction_error = f"Full metadata extraction timed out or failed: {stderr_full}"
+                    logger.error(extraction_error)
+                elif return_code_full == 0 and os.path.isdir(squashfs_root):
                     logger.info("Full extract for metadata successful.")
                     for root, _, files in os.walk(squashfs_root):
                         for file in files: 
@@ -775,15 +929,11 @@ class AppImageInstaller:
                     if not found_desktop_file:
                         logger.warning("Full extract ok, but still no .desktop file found inside.")
                 else: 
-                    stderr_output = result_full.stderr.strip() if result_full.stderr else "(no stderr)"
-                    log_msg = f"Full extract for metadata failed (Code: {result_full.returncode}): {stderr_output}"
+                    stderr_output = stderr_full.strip() if stderr_full else "(no stderr)"
+                    log_msg = f"Full extract for metadata failed (Code: {return_code_full}): {stderr_output}"
                     logger.error(log_msg)
                     extraction_error = log_msg 
 
-        except subprocess.TimeoutExpired as e:
-            error_msg = f"Metadata extraction timed out ({e.cmd})."
-            logger.error(error_msg)
-            extraction_error = error_msg
         except Exception as e:
             error_msg = f"Error during metadata extraction process: {e}"
             logger.error(error_msg, exc_info=True)

@@ -367,12 +367,20 @@ class InstallPage(QWidget):
                 logger.info("AppImage copied successfully.")
                 self.progress_bar.setValue(75)
 
+                # Get the extract directory for Qt detection
+                extract_dir_for_qt = None
+                if temp_installer and hasattr(temp_installer, 'temp_dir') and temp_installer.temp_dir:
+                    potential_squashfs = os.path.join(temp_installer.temp_dir, "meta_read", "squashfs-root")
+                    if os.path.isdir(potential_squashfs):
+                        extract_dir_for_qt = potential_squashfs
+                
                 # 6. Call integration function using the COPIED path
                 self.update_status(translator.get_text("Creating shortcuts..."))
                 created_bin_link, created_desktop_file = integration.register_appimage_integration(
                     copied_appimage_path, # Use the path to the copy!
                     app_info, 
-                    temp_icon_path
+                    temp_icon_path,
+                    extract_dir=extract_dir_for_qt  # For Qt detection
                 )
                 
                 # Cleanup the temp installer AFTER integration call (icon needed)
