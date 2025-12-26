@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=AppImage Manager
+GenericName=AppImage Package Manager
+Comment=Install, manage, and remove AppImage applications
+Comment[tr]=AppImage uygulamalarını kur, yönet ve kaldır
+Exec=appimagemanager %F
+Icon=appimagemanager
+Terminal=false
+Type=Application
+Categories=Utility;System;PackageManager;
+Keywords=AppImage;Package;Manager;Install;
+MimeType=application/vnd.appimage;application/x-iso9660-appimage;
+StartupNotify=true
+StartupWMClass=appimagemanager

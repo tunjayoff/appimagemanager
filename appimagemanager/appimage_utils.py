@@ -366,10 +366,10 @@ def find_orphaned_integrations():
                 if known_desktop_p and os.path.exists(known_desktop_p) and os.path.samefile(desktop_path, known_desktop_p):
                     is_known_by_path = True
                     logger.debug(f"Desktop file '{desktop_path}' matches known app by path.")
-            break
+                    break  # Exit inner loop once match is found
 
             if is_known_by_path:
-                         continue
+                continue
 
             exec_path_in_desktop = None
             for line in content.splitlines():

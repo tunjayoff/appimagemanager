@@ -53,6 +53,7 @@ def setup_logging():
 def sanitize_name(name):
     """Sanitizes an application name for use in directory or file names.
     Removes special characters and replaces spaces.
+    SECURITY: Prevents path traversal attacks.
     """
     if not name:
         return None
@@ -60,6 +61,20 @@ def sanitize_name(name):
     try:
         # Convert to lowercase
         name = name.lower()
+        
+        # SECURITY: URL decode potential encoded characters first
+        # This prevents bypassing sanitization with %2F, %2E, etc.
+        import urllib.parse
+        try:
+            name = urllib.parse.unquote(name)
+        except Exception:
+            pass  # If decoding fails, continue with original
+        
+        # SECURITY: Remove all path separators and traversal patterns
+        # This MUST happen before any other processing
+        name = name.replace('/', '_')
+        name = name.replace('\\', '_')
+        name = name.replace('..', '')  # Remove directory traversal
         
         # Pre-check if the name is already clean and simple (only letters, no spaces or special chars)
         if re.match(r'^[a-z0-9]+$', name):
@@ -71,9 +86,15 @@ def sanitize_name(name):
         # Replace spaces and common separators with underscore
         name = re.sub(r'[\s/:]+', '_', name)
         # Remove characters not suitable for filenames (allow letters, numbers, underscore, hyphen, dot)
+        # SECURITY: Explicitly disallow / and \ even though regex should catch them
         name = re.sub(r'[^a-z0-9_\-\.]', '', name)
         # Remove leading/trailing underscores/hyphens/dots
         name = name.strip('_-.')
+        
+        # SECURITY: Final check - remove any remaining path traversal attempts
+        while '..' in name:
+            name = name.replace('..', '')
+        
         # Ensure name is not empty after sanitization
         if not name:
             logger.warning("Sanitization resulted in an empty name.")

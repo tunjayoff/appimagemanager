@@ -54,60 +54,42 @@ AppImage Manager simplifies the process of installing, organizing, and managing 
 
 ## 🚀 Installation
 
-AppImage Manager is designed for Ubuntu 24.04 (and other Debian-based distributions). Three installation methods are available:
-
-### Method 1: Using the .deb Package (Recommended)
-
-1. Download the latest release from the [Releases Page](https://github.com/tunjayoff/appimagemanager/releases)
-2. Install via graphical interface:
-   - Double-click the downloaded .deb file
-   - Follow the prompts to install
-
-   OR via terminal:
-   ```bash
-   sudo dpkg -i appimagemanager_*.deb
-   sudo apt --fix-broken install  # If needed
-   ```
-
-### Method 2: Using the Build Script
+### Arch Linux (AUR)
 
 ```bash
-# Install dependencies
-sudo apt update
-sudo apt install -y git python3-venv python3-pip build-essential dpkg-dev libxcb-cursor0
+# Using yay
+yay -S appimagemanager
 
-# Clone the repository
-git clone https://github.com/tunjayoff/appimagemanager.git
-cd appimagemanager
-
-# Run the build script
-chmod +x build_and_install.sh
-./build_and_install.sh
+# Using paru
+paru -S appimagemanager
 ```
 
-### Method 3: Running from Source
+### Ubuntu / Debian (.deb Package)
+
+Download the `.deb` package from the [Releases](https://github.com/tunjayoff/appimagemanager/releases) page:
 
 ```bash
-# Install dependencies
-sudo apt update
-sudo apt install -y git python3-venv python3-pip
+wget https://github.com/tunjayoff/appimagemanager/releases/latest/download/appimagemanager_1.0.0_all.deb
+sudo dpkg -i appimagemanager_*.deb
+sudo apt --fix-broken install
+```
 
-# Clone the repository
+### Other Distributions (pip)
+
+```bash
+pip install appimagemanager
+```
+
+### From Source
+
+```bash
 git clone https://github.com/tunjayoff/appimagemanager.git
 cd appimagemanager
-
-# Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install Python dependencies
 pip install -r requirements.txt
-
-# Run the application
 python -m appimagemanager
 ```
 
-For more detailed installation instructions, see the [Installation Guide](documentation/installation.md).
+For more details, see the [Installation Guide](documentation/installation.md).
 
 ---
 
@@ -150,11 +132,25 @@ For more information about configuration options, see the [Configuration Guide](
 
 ## 📋 System Requirements
 
-- **Operating System**: Ubuntu 24.04 (officially supported) or other Debian-based distributions
-- **Package Format**: Available as .deb package only (officially)
+- **Operating System**: 
+  - Arch Linux (via AUR)
+  - Ubuntu / Debian (via .deb package)
+  - Any Linux (via pip or from source)
 - **Python**: 3.8 or higher (3.10+ recommended)
-- **Dependencies**: PyQt6, libfuse2 (recommended)
+- **Dependencies**: PyQt6, python-packaging, libfuse2 (recommended)
 - **Disk Space**: ~10 MB (plus space for your applications)
+
+---
+
+## 📦 Packaging
+
+Distribution-specific packaging files are available in the [packaging/](packaging/) directory:
+
+| Distribution | Package Format | Status |
+|-------------|----------------|--------|
+| Arch Linux | AUR | ✅ Available |
+| Ubuntu/Debian | DEB | ✅ Available |
+| Any Linux | pip | ✅ Available |
 
 ---
 

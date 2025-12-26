@@ -83,7 +83,14 @@ class AppImageInstaller:
 
         try:
             extract_command = [self.appimage_path, f"--appimage-extract=*.desktop"]
-            result = subprocess.run(extract_command, cwd=extract_meta_dir, check=False, capture_output=True, text=True, timeout=15)
+            # Create environment that prevents AppImage from launching GUI
+            extract_env = os.environ.copy()
+            extract_env["APPIMAGE_EXTRACT_AND_RUN"] = "0"
+            extract_env["NO_CLEANUP"] = "1"
+            extract_env.pop("DISPLAY", None)  # Remove DISPLAY to prevent GUI launch
+            extract_env.pop("WAYLAND_DISPLAY", None)  # Also remove Wayland display
+            result = subprocess.run(extract_command, cwd=extract_meta_dir, check=False, 
+                                   capture_output=True, text=True, timeout=15, env=extract_env)
 
             if result.returncode == 0:
                 squashfs_root = os.path.join(extract_meta_dir, "squashfs-root")
@@ -353,7 +360,14 @@ class AppImageInstaller:
         try:
             extract_command = [self.appimage_path, "--appimage-extract"]
             logger.debug(f"Running command: {' '.join(extract_command)} in {self.temp_dir}")
-            result = subprocess.run(extract_command, cwd=self.temp_dir, check=True, capture_output=True, text=True, timeout=120)
+            # Create environment that prevents AppImage from launching GUI
+            extract_env = os.environ.copy()
+            extract_env["APPIMAGE_EXTRACT_AND_RUN"] = "0"
+            extract_env["NO_CLEANUP"] = "1"
+            extract_env.pop("DISPLAY", None)  # Remove DISPLAY to prevent GUI launch
+            extract_env.pop("WAYLAND_DISPLAY", None)  # Also remove Wayland display
+            result = subprocess.run(extract_command, cwd=self.temp_dir, check=True, 
+                                   capture_output=True, text=True, timeout=120, env=extract_env)
             
             if not os.path.isdir(self.extract_dir):
                 logger.error(f"Extraction command succeeded but expected directory '{self.extract_dir}' not found.")
@@ -710,10 +724,18 @@ class AppImageInstaller:
         found_desktop_file = None
         extraction_error = None
         
+        # Create environment that prevents AppImage from launching GUI
+        extract_env = os.environ.copy()
+        extract_env["APPIMAGE_EXTRACT_AND_RUN"] = "0"
+        extract_env["NO_CLEANUP"] = "1"
+        extract_env.pop("DISPLAY", None)  # Remove DISPLAY to prevent GUI launch
+        extract_env.pop("WAYLAND_DISPLAY", None)  # Also remove Wayland display
+        
         try:
             logger.debug("Attempting selective desktop file extraction...")
             selective_extract_command = [self.appimage_path, f"--appimage-extract=*.desktop"]
-            result_selective = subprocess.run(selective_extract_command, cwd=meta_extract_dir, check=False, capture_output=True, text=True, timeout=20)
+            result_selective = subprocess.run(selective_extract_command, cwd=meta_extract_dir, check=False, 
+                                             capture_output=True, text=True, timeout=20, env=extract_env)
             
             logger.debug(f"Selective extract result code: {result_selective.returncode}")
             if result_selective.returncode == 0 and os.path.isdir(squashfs_root):
@@ -737,7 +759,8 @@ class AppImageInstaller:
                 if os.path.exists(squashfs_root): shutil.rmtree(squashfs_root) 
                 
                 full_extract_command = [self.appimage_path, "--appimage-extract"]
-                result_full = subprocess.run(full_extract_command, cwd=meta_extract_dir, check=False, capture_output=True, text=True, timeout=90)
+                result_full = subprocess.run(full_extract_command, cwd=meta_extract_dir, check=False, 
+                                            capture_output=True, text=True, timeout=90, env=extract_env)
                  
                 if result_full.returncode == 0 and os.path.isdir(squashfs_root):
                     logger.info("Full extract for metadata successful.")
@@ -774,42 +797,87 @@ class AppImageInstaller:
             icon_name = self.app_info.get("icon_name")
             found_icon_source_path = None
 
+            # Check .DirIcon first (can be a file or symlink)
             potential_dir_icon = os.path.join(squashfs_root, ".DirIcon")
-            if os.path.isfile(potential_dir_icon):
-                found_icon_source_path = potential_dir_icon
-                logger.debug(f"Found preview icon source: .DirIcon at {found_icon_source_path}")
+            if os.path.exists(potential_dir_icon):
+                # Handle symlink - follow it to get the actual icon
+                if os.path.islink(potential_dir_icon):
+                    link_target = os.readlink(potential_dir_icon)
+                    if not os.path.isabs(link_target):
+                        link_target = os.path.join(squashfs_root, link_target)
+                    if os.path.isfile(link_target):
+                        found_icon_source_path = link_target
+                        logger.debug(f"Found preview icon source: .DirIcon symlink -> {found_icon_source_path}")
+                elif os.path.isfile(potential_dir_icon):
+                    found_icon_source_path = potential_dir_icon
+                    logger.debug(f"Found preview icon source: .DirIcon at {found_icon_source_path}")
 
             if not found_icon_source_path and icon_name:
                 logger.debug(f"Searching for preview icon source matching name '{icon_name}' in {squashfs_root}")
                 icon_exts = ['.png', '.svg', '.svgz', '.xpm', '.ico']
+                # Extended search paths for icon locations
                 common_dirs = [
-                    "", 
-                    "share/icons/hicolor/scalable/apps",
-                    "usr/share/icons/hicolor/scalable/apps",
-                    "share/icons/hicolor/128x128/apps", 
-                    "usr/share/icons/hicolor/128x128/apps",
-                    "share/icons/hicolor/64x64/apps",
+                    "",  # Root of squashfs
+                    # Standard XDG hicolor icon directories (256, 128, 64, 48, 32, scalable)
+                    "usr/share/icons/hicolor/256x256/apps",
+                    "usr/share/icons/hicolor/128x128/apps", 
                     "usr/share/icons/hicolor/64x64/apps",
-                    "share/pixmaps",
+                    "usr/share/icons/hicolor/48x48/apps",
+                    "usr/share/icons/hicolor/32x32/apps",
+                    "usr/share/icons/hicolor/scalable/apps",
+                    "share/icons/hicolor/256x256/apps",
+                    "share/icons/hicolor/128x128/apps",
+                    "share/icons/hicolor/64x64/apps",
+                    "share/icons/hicolor/48x48/apps",
+                    "share/icons/hicolor/32x32/apps",
+                    "share/icons/hicolor/scalable/apps",
+                    # Pixmaps directories
                     "usr/share/pixmaps",
+                    "share/pixmaps",
+                    # Some apps use these non-standard locations
+                    "usr/share/icons",
+                    "share/icons",
+                    "resources",
+                    "assets",
+                    "icons",
                 ]
+                
+                # First check if icon_name is a path
                 if '/' in icon_name:
                     potential_rel_path = os.path.join(squashfs_root, icon_name)
                     if os.path.isfile(potential_rel_path):
                         found_icon_source_path = potential_rel_path
 
+                # Search in common directories
                 if not found_icon_source_path:
                     for cdir in common_dirs:
+                        # Try exact icon name match first
                         potential_base_path = os.path.join(squashfs_root, cdir, icon_name)
                         if os.path.isfile(potential_base_path):
                             found_icon_source_path = potential_base_path
                             break 
+                        # Try with extensions
                         for ext in icon_exts:
                             potential_path = os.path.join(squashfs_root, cdir, f"{icon_name}{ext}")
                             if os.path.isfile(potential_path):
                                 found_icon_source_path = potential_path
                                 break 
-                        if found_icon_source_path: break 
+                        if found_icon_source_path: 
+                            break
+                
+                # Fallback: recursive search for icon file if not found
+                if not found_icon_source_path:
+                    logger.debug(f"Icon not found in common locations, attempting recursive search...")
+                    for root, dirs, files in os.walk(squashfs_root):
+                        for file in files:
+                            file_lower = file.lower()
+                            # Match icon name (with or without extension)
+                            if file_lower.startswith(icon_name.lower()) and any(file_lower.endswith(ext) for ext in icon_exts):
+                                found_icon_source_path = os.path.join(root, file)
+                                logger.debug(f"Found icon via recursive search: {found_icon_source_path}")
+                                break
+                        if found_icon_source_path:
+                            break
 
                 if found_icon_source_path:
                     logger.debug(f"Found preview icon source by name: {found_icon_source_path}")
