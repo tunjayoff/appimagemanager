@@ -17,12 +17,11 @@ if not logger.hasHandlers():
 
 # Application information
 APP_NAME = "appimagemanager"
-APP_VERSION = "1.0.0"
-APP_DESCRIPTION = "Install, manage and remove AppImage applications on Ubuntu"
+APP_VERSION = "1.0.3"
+APP_DESCRIPTION = "Install, manage and remove AppImage applications on Linux"
 
 # System constants
-SUPPORTED_UBUNTU_VERSION = "24.04"
-LIBFUSE_PACKAGE = "libfuse2t64"  # For Ubuntu 24.04
+LIBFUSE_PACKAGE = "fuse2"  # For most Linux distributions
 
 # Directory configuration
 USER_HOME = str(Path.home())
