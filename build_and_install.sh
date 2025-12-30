@@ -14,7 +14,7 @@ echo -e "${BLUE}   AppImage Manager Build & Install   ${NC}"
 echo -e "${BLUE}========================================${NC}\n"
 
 # Configuration
-VERSION="1.0.2"
+VERSION="1.0.3"
 PKG_NAME="appimagemanager"
 DEB_NAME="${PKG_NAME}_${VERSION}_amd64.deb"
 MAINTAINER="tunjayoff <tuncayessiz9@gmail.com>"

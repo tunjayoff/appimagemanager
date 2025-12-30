@@ -15,7 +15,7 @@ package_data = {
 
 setup(
     name="appimagemanager",
-    version="1.0.2",
+    version="1.0.3",
     description="Easily install, manage, and remove AppImage applications on Linux systems",
     long_description=long_description,
     long_description_content_type="text/markdown",

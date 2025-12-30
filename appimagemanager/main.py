@@ -798,7 +798,9 @@ def main():
         # Set application details (optional but good practice)
         app.setApplicationName(config.APP_NAME)
         app.setApplicationVersion(config.APP_VERSION)
-        app.setOrganizationName("YourOrg") # Or remove if not applicable
+        app.setOrganizationName("tunjayoff")
+        # Set desktop file name for proper Alt+Tab icon/name on Wayland and desktops
+        app.setDesktopFileName("appimagemanager")
         
         # Create and show the main window
         main_window = MainWindow()
