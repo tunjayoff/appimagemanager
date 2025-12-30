@@ -32,7 +32,7 @@ Download the `.deb` package from the [Releases](https://github.com/tunjayoff/app
 
 ```bash
 # Download and install
-wget https://github.com/tunjayoff/appimagemanager/releases/latest/download/appimagemanager_1.0.0_all.deb
+wget https://github.com/tunjayoff/appimagemanager/releases/latest/download/appimagemanager_1.0.1_amd64.deb
 sudo dpkg -i appimagemanager_*.deb
 sudo apt --fix-broken install
 ```

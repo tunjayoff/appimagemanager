@@ -40,7 +40,14 @@ chmod +x /path/to/your/file.AppImage
 **Problem:** Error about missing dependencies (rare).
 
 **Solution:**
-Make sure you have libfuse2 installed:
+Make sure you have fuse libraries installed:
+
+**Arch Linux:**
+```bash
+sudo pacman -S fuse2
+```
+
+**Ubuntu/Debian:**
 ```bash
 sudo apt update
 sudo apt install libfuse2
@@ -134,7 +141,7 @@ If you're still having trouble after trying these solutions:
 
 1. Make sure you're using the latest version of AppImage Manager
 2. Include the following information when reporting issues:
-   - Your Ubuntu version (e.g., Ubuntu 24.04)
+   - Your Linux distribution and version (e.g., Arch Linux, Ubuntu 24.04)
    - AppImage Manager version (found in "About" page)
    - Relevant error messages from the log file
    - Steps to reproduce the problem

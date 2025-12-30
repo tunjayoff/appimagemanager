@@ -22,13 +22,19 @@ This guide walks you through the process of installing AppImage Manager on your 
 
 Before installing AppImage Manager, ensure your system meets these requirements:
 
-- **Operating System**: Ubuntu 24.04 (officially supported) or other Debian-based distributions
+- **Operating System**: Arch Linux, Ubuntu, Debian, or other Linux distributions
 - **Dependencies**:
   - Python 3.8 or higher (Python 3.10+ recommended)
-  - PyQt6 (installed automatically with the .deb package)
-  - libfuse2 (recommended for maximum compatibility)
+  - PyQt6 (installed automatically with packages)
+  - fuse2 (recommended for maximum compatibility)
 
-To install libfuse2 if needed:
+To install fuse on Arch Linux:
+
+```bash
+sudo pacman -S fuse2
+```
+
+To install fuse on Ubuntu/Debian:
 
 ```bash
 sudo apt update
@@ -37,14 +43,31 @@ sudo apt install libfuse2
 
 ## Installation Methods
 
-AppImage Manager can be installed in multiple ways, depending on your preferences and needs.
+AppImage Manager can be installed in multiple ways, depending on your preferences and distribution.
 
-### Method 1: Using the .deb Package
+### Method 1: Arch Linux (AUR)
 
-This is the recommended method for most users on Ubuntu and Debian-based systems:
+This is the recommended method for Arch Linux users:
+
+```bash
+# Using yay
+yay -S appimagemanager
+
+# Using paru
+paru -S appimagemanager
+
+# Manual installation
+git clone https://aur.archlinux.org/appimagemanager.git
+cd appimagemanager
+makepkg -si
+```
+
+### Method 2: Using the .deb Package (Debian/Ubuntu)
+
+This is the recommended method for Ubuntu and Debian-based systems:
 
 1. **Download the .deb package**:
-   - Find the latest release on the project's GitHub page
+   - Find the latest release on the [GitHub Releases](https://github.com/tunjayoff/appimagemanager/releases) page
    - Look for a file named `appimagemanager_X.Y.Z_amd64.deb`
 
 2. **Install via graphical interface**:
@@ -54,7 +77,6 @@ This is the recommended method for most users on Ubuntu and Debian-based systems
 
 3. **Or install via terminal**:
    ```bash
-   sudo apt update
    sudo dpkg -i /path/to/appimagemanager_X.Y.Z_amd64.deb
    
    # If you encounter dependency errors:
@@ -65,7 +87,7 @@ This is the recommended method for most users on Ubuntu and Debian-based systems
    - Find AppImage Manager in your application menu, or
    - Run `appimagemanager` in a terminal
 
-### Method 2: Using the Build Script
+### Method 3: Using the Build Script (Debian/Ubuntu)
 
 If you prefer to build from source but still want the convenience of a .deb package:
 

@@ -91,14 +91,14 @@ This launches the application directly from the source code, which is useful for
 
 ## Building the Application
 
-### Building a .deb Package
+### Building a .deb Package (Debian/Ubuntu)
 
 The included build script automates the creation of a Debian package:
 
 1. **Install build dependencies**
    ```bash
    sudo apt update
-   sudo apt install build-essential devscripts debhelper python3-setuptools
+   sudo apt install build-essential devscripts debhelper python3-setuptools dpkg-dev
    ```
 
 2. **Run the build script**
@@ -106,6 +106,16 @@ The included build script automates the creation of a Debian package:
    chmod +x build_and_install.sh
    ./build_and_install.sh
    ```
+
+### Building on Arch Linux
+
+For Arch Linux, use the PKGBUILD from AUR:
+
+```bash
+git clone https://aur.archlinux.org/appimagemanager.git
+cd appimagemanager
+makepkg -si
+```
 
 The script performs the following tasks:
 - Creates necessary build directories

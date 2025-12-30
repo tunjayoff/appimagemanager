@@ -57,12 +57,11 @@ AppImage Manager is ideal for these users:
 
 ## 💻 System Requirements
 
-- **Officially Supported**: Ubuntu 24.04 (developed and tested primarily on this version)
-- **Package Format**: Available as .deb package only (officially)
-- **Compatible With**: Most Debian-based distributions (Ubuntu, Mint, etc.)
-- **Other Linux Systems**: Code can be modified to work on other distributions
+- **Officially Supported**: Arch Linux, Ubuntu, Debian, and other Linux distributions
+- **Package Formats**: AUR (Arch), DEB (Debian/Ubuntu), pip (universal)
+- **Compatible With**: Most Linux distributions with Python 3.8+
 - **Python**: Python 3.8 or higher
-- **Dependencies**: PyQt5/PySide2, libfuse2 (or fuse3)
+- **Dependencies**: PyQt6, fuse2 (or fuse3)
 - **Disk Space**: Approximately 10 MB (you'll need more space for your applications)
 - **RAM**: Minimum 50 MB
 
@@ -77,6 +76,6 @@ Start experiencing AppImage Manager right away with the [installation guide](ins
 ---
 
 <p align="center">
-  <em>Developed, maintained, and lovingly crafted by AppImage Manager © 2024</em><br>
+  <em>Developed, maintained, and lovingly crafted by AppImage Manager © 2024-2025</em><br>
   <small>Developer: Tuncay EŞSİZ (tunjayoff)</small>
 </p>
