@@ -17,7 +17,7 @@ if not logger.hasHandlers():
 
 # Application information
 APP_NAME = "appimagemanager"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_DESCRIPTION = "Install, manage and remove AppImage applications on Linux"
 
 # System constants

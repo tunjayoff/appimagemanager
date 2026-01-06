@@ -335,35 +335,14 @@ class AppImageInstaller:
                     self.final_executable_path = usr_bin_path
                     logger.debug(f"Found executable in usr/bin: {self.final_executable_path}")
                 
-                # Priority 2: Check app/ directory (Electron apps)
-                elif app_dir_path and os.path.exists(app_dir_path) and is_real_executable(app_dir_path):
-                    self.final_executable_path = app_dir_path
-                    logger.debug(f"Found executable in app/ (Electron): {self.final_executable_path}")
+                # Priority 2: Check AppRun FIRST - this is the standard AppImage entry point
+                # AppRun is a shell script or symlink that sets up the environment properly
+                elif os.path.exists(direct_path) and os.access(direct_path, os.X_OK):
+                    self.final_executable_path = direct_path
+                    logger.debug(f"Found AppRun executable: {self.final_executable_path}")
                 
-                # Priority 3: Search app/ directory for any executable matching app name
-                elif os.path.isdir(os.path.join(self.app_install_dir, "app")):
-                    app_subdir = os.path.join(self.app_install_dir, "app")
-                    for item in os.listdir(app_subdir):
-                        item_path = os.path.join(app_subdir, item)
-                        if os.path.isfile(item_path) and is_real_executable(item_path):
-                            # Check if the name matches approximately
-                            item_lower = item.lower()
-                            if app_name_sanitized and (app_name_sanitized in item_lower or item_lower in app_name_sanitized):
-                                self.final_executable_path = item_path
-                                logger.debug(f"Found executable in app/ by name match: {self.final_executable_path}")
-                                break
-                            # Or just take the first ELF binary found in app/
-                            try:
-                                with open(item_path, 'rb') as f:
-                                    if f.read(4) == b'\x7fELF':
-                                        self.final_executable_path = item_path
-                                        logger.debug(f"Found ELF executable in app/: {self.final_executable_path}")
-                                        break
-                            except (IOError, OSError):
-                                pass
-                
-                # Priority 4: Check AppRun.wrapped symlink
-                if not self.final_executable_path and os.path.islink(apprun_wrapped_path):
+                # Priority 3: Check AppRun.wrapped symlink (some AppImages use this pattern)
+                elif os.path.islink(apprun_wrapped_path):
                     try:
                         wrapped_target = os.readlink(apprun_wrapped_path)
                         target_path = os.path.normpath(os.path.join(self.app_install_dir, wrapped_target))
@@ -373,19 +352,54 @@ class AppImageInstaller:
                     except (OSError, IOError) as e:
                         logger.warning(f"Failed to read AppRun.wrapped symlink: {e}")
                 
-                # Priority 5: Direct path (AppRun) - only if it's a real executable
-                if not self.final_executable_path and os.path.exists(direct_path) and is_real_executable(direct_path):
-                    self.final_executable_path = direct_path
-                    logger.debug(f"Found executable directly in app dir: {self.final_executable_path}")
+                # Priority 4: Check app/ directory for main binary (Electron apps)
+                # Skip .so files as they are shared libraries, not executables
+                elif app_dir_path and os.path.exists(app_dir_path) and is_real_executable(app_dir_path):
+                    self.final_executable_path = app_dir_path
+                    logger.debug(f"Found executable in app/ (Electron): {self.final_executable_path}")
+                
+                # Priority 5: Search app/ directory for any executable matching app name
+                # But skip shared libraries (.so files)
+                elif os.path.isdir(os.path.join(self.app_install_dir, "app")):
+                    app_subdir = os.path.join(self.app_install_dir, "app")
+                    for item in os.listdir(app_subdir):
+                        # Skip shared libraries
+                        if item.endswith('.so') or '.so.' in item:
+                            continue
+                        item_path = os.path.join(app_subdir, item)
+                        if os.path.isfile(item_path) and is_real_executable(item_path):
+                            # Check if the name matches approximately
+                            item_lower = item.lower()
+                            if app_name_sanitized and (app_name_sanitized in item_lower or item_lower in app_name_sanitized):
+                                self.final_executable_path = item_path
+                                logger.debug(f"Found executable in app/ by name match: {self.final_executable_path}")
+                                break
+                            # Or just take the first real ELF binary found in app/ (not a .so)
+                            try:
+                                with open(item_path, 'rb') as f:
+                                    if f.read(4) == b'\x7fELF':
+                                        self.final_executable_path = item_path
+                                        logger.debug(f"Found ELF executable in app/: {self.final_executable_path}")
+                                        break
+                            except (IOError, OSError):
+                                pass
             
             # Fallback: If nothing found and directory doesn't exist yet (new installation)
             if not self.final_executable_path:
                 # For new installations, try to determine based on app structure in extract_dir
                 if self.extract_dir and os.path.isdir(self.extract_dir):
-                    # Check extract_dir for app/ structure
-                    extract_app_dir = os.path.join(self.extract_dir, "app")
-                    if os.path.isdir(extract_app_dir):
+                    # First check for AppRun in extract_dir
+                    extract_apprun = os.path.join(self.extract_dir, "AppRun")
+                    if os.path.exists(extract_apprun) and os.access(extract_apprun, os.X_OK):
+                        self.final_executable_path = os.path.join(self.app_install_dir, "AppRun")
+                        logger.debug(f"Determined AppRun from extract: {self.final_executable_path}")
+                    # Check extract_dir for app/ structure (fallback)
+                    elif os.path.isdir(os.path.join(self.extract_dir, "app")):
+                        extract_app_dir = os.path.join(self.extract_dir, "app")
                         for item in os.listdir(extract_app_dir):
+                            # Skip shared libraries
+                            if item.endswith('.so') or '.so.' in item:
+                                continue
                             item_path = os.path.join(extract_app_dir, item)
                             if os.path.isfile(item_path) and is_real_executable(item_path):
                                 # Use the relative path from install dir

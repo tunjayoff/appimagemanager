@@ -12,7 +12,10 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtGui import QIcon, QColor, QPixmap
 from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, QEvent
 import os
+import logging
 import shutil # Import shutil for rmtree and which
+
+logger = logging.getLogger(__name__)
 import subprocess # For running applications
 
 from .. import config

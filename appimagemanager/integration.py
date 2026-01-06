@@ -61,9 +61,9 @@ def is_qt_app_needing_xcb_fallback(appimage_path=None, install_dir=None):
                                 has_xcb = any('xcb' in pf.lower() for pf in platform_files)
                                 if has_xcb and not has_wayland:
                                     qt_indicators.append(('no_wayland_plugin', platforms_dir))
-                    # Don't recurse too deep
+                    # Don't recurse too deep - clear dirs to stop os.walk from going deeper
                     if root.count(os.sep) - search_path.count(os.sep) > 3:
-                        break
+                        dirs.clear()  # This stops os.walk from descending further
             except (PermissionError, OSError) as e:
                 logger.debug(f"Error scanning {search_path} for Qt indicators: {e}")
                 continue

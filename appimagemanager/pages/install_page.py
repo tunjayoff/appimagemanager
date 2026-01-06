@@ -10,7 +10,10 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdi
                              QApplication)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QEvent, QCoreApplication
 import os
+import logging
 from PyQt6.QtGui import QIcon, QAction, QPixmap
+
+logger = logging.getLogger(__name__)
 # from PyQt6.QtWidgets import QGraphicsDropShadowEffect # Unused import
 import uuid
 import datetime
@@ -232,7 +235,8 @@ class InstallPage(QWidget):
             temp_installer = AppImageInstaller(file_path)
             
             # --- Read Metadata --- 
-            if temp_installer.read_metadata():
+            read_success, _ = temp_installer.read_metadata()
+            if read_success:
                  # Metadata read successfully
                  app_info = temp_installer.app_info
                  app_name = app_info.get("name", "Unknown") # Use Unknown as fallback here too
@@ -302,7 +306,7 @@ class InstallPage(QWidget):
         """Starts the actual installation or registration process based on selected options."""
         appimage_path = self.selected_file_label.text()
         if not appimage_path or not os.path.exists(appimage_path):
-            self.update_status(translator.get_text("Error: Please select a valid AppImage file first."), error=True)
+            self.update_status(translator.get_text("Error: Please select a valid AppImage file first."), is_error=True)
             return
 
         # Temporary directories to clean up
@@ -327,6 +331,7 @@ class InstallPage(QWidget):
             created_desktop_file = None
             copied_appimage_path = None # Path to the *copied* file
             temp_installer = None # For metadata reading
+            temp_installer_cleaned = False  # Track if cleanup was done
             try:
                 # 1. Ensure managed directory exists
                 managed_dir = config.MANAGED_APPIMAGES_DIR
@@ -384,7 +389,10 @@ class InstallPage(QWidget):
                 )
                 
                 # Cleanup the temp installer AFTER integration call (icon needed)
-                if temp_installer: temp_installer.cleanup()
+                temp_installer_cleaned = False
+                if temp_installer: 
+                    temp_installer.cleanup()
+                    temp_installer_cleaned = True
 
                 if not created_bin_link or not created_desktop_file:
                      raise RuntimeError(translator.get_text("Failed to create integration files (link/desktop)."))
@@ -427,19 +435,23 @@ class InstallPage(QWidget):
                 
             except Exception as e:
                 logger.error(f"Add to Library failed: {e}", exc_info=True)
-                # Attempt cleanup
-                if temp_installer: temp_installer.cleanup() # Ensure temp installer cleaned
+                # Attempt cleanup only if not already done
+                if temp_installer and not temp_installer_cleaned: 
+                    temp_installer.cleanup()
+                    temp_installer_cleaned = True
                 integration.unregister_appimage_integration(created_bin_link, created_desktop_file)
                 if copied_appimage_path and os.path.exists(copied_appimage_path): 
                     try: 
                         os.remove(copied_appimage_path)
                     except OSError: 
                         logger.error(f"Failed cleanup: Could not remove copied file {copied_appimage_path}")
-                self.update_status(f"{translator.get_text('Add to Library failed')}: {e}", error=True) # New error message
+                self.update_status(f"{translator.get_text('Add to Library failed')}: {e}", is_error=True)
                 self.progress_bar.setRange(0, 1) 
                 self.progress_bar.setValue(0)
             finally:
-                if temp_installer: temp_installer.cleanup() # Extra cleanup just in case
+                # Final cleanup only if not already done
+                if temp_installer and not temp_installer_cleaned:
+                    temp_installer.cleanup()
                 QTimer.singleShot(1500, lambda: self.set_ui_installing(False))
             
             return # Stop here for this mode
@@ -451,7 +463,7 @@ class InstallPage(QWidget):
             install_mode = "custom"
             custom_path = self.custom_path_input.text()
             if not custom_path or not os.path.isdir(custom_path):
-                self.update_status(translator.get_text("Error: Please select a valid custom installation directory."), error=True)
+                self.update_status(translator.get_text("Error: Please select a valid custom installation directory."), is_error=True)
                 return
         # else: install_mode remains "user"
         
@@ -497,11 +509,11 @@ class InstallPage(QWidget):
 
                 if not install_dir:
                     logger.error("System install failed: Target installation directory not determined.")
-                    self.update_status(translator.get_text("Error: Target directory unknown."), error=True)
+                    self.update_status(translator.get_text("Error: Target directory unknown."), is_error=True)
                     return
                 if not source_dir or not os.path.isdir(source_dir):
                     logger.error("System install failed: Temporary source directory invalid.")
-                    self.update_status(translator.get_text("Error: Extraction source invalid."), error=True)
+                    self.update_status(translator.get_text("Error: Extraction source invalid."), is_error=True)
                     return
 
                 # 1. Ensure base installation directory exists
@@ -524,41 +536,30 @@ class InstallPage(QWidget):
                     # Make sure the target file is executable
                     root_commands.append(["chmod", "+x", final_installed_exec_path])
                     
-                    # Check if we need to create a wrapper script that handles AppImage environment setup
-                    # First check if AppRun exists and if we should use its environment setup
-                    apprun_path = os.path.join(installer.app_install_dir, "AppRun")
+                    # Check if AppRun exists in the SOURCE (extraction) directory
+                    # We can't check install_dir because files haven't been copied there yet
+                    apprun_in_source = os.path.join(source_dir, "AppRun")
+                    apprun_in_install = os.path.join(installer.app_install_dir, "AppRun")
                     
-                    if os.path.exists(apprun_path):
-                        # Create a wrapper script that uses AppRun's environment setup but directly calls the executable
-                        # This preserves the AppImage's environment configuration while making it accessible from PATH
+                    if os.path.exists(apprun_in_source):
+                        # For extracted AppImages, we MUST set APPDIR explicitly because
+                        # the AppImage runtime doesn't handle this when running extracted.
+                        # AppRun scripts rely on APPDIR being set to find libraries and binaries.
                         wrapper_content = f"""#!/bin/bash
 # Wrapper script for {installer.app_info.get('name', 'AppImage')}
-# This script maintains the AppImage environment but makes it accessible from PATH
+# For extracted AppImages, we need to set APPDIR explicitly
 
-# Use the AppImage's directory for consistency
-cd "{installer.app_install_dir}"
-
-# Set environment variables from AppRun if possible
-if [ -f "{apprun_path}" ]; then
-    # Source the environment setup functions without executing AppRun itself
-    # This is done by creating a temporary script that extracts the environment setup
-    TEMP_ENV_SCRIPT=$(mktemp)
-    grep -v "^exec " "{apprun_path}" > "$TEMP_ENV_SCRIPT"
-    # Add a statement to export all variables to the environment
-    echo 'export PATH LD_LIBRARY_PATH MAGICK_HOME GS_LIB GS_FONTPATH GS_OPTIONS QT_PLUGIN_PATH XDG_DATA_DIRS QT_QPA_PLATFORM_PLUGIN_PATH' >> "$TEMP_ENV_SCRIPT"
-    # Source the environment script
-    source "$TEMP_ENV_SCRIPT"
-    rm -f "$TEMP_ENV_SCRIPT"
-fi
-
-# Execute the actual binary with all arguments
-exec "{final_installed_exec_path}" "$@"
+export APPDIR="{installer.app_install_dir}"
+export DESKTOPINTEGRATION=1
+cd "$APPDIR"
+exec "./AppRun" "$@"
 """
                     else:
-                        # Simpler wrapper when AppRun isn't available or for simpler AppImages
+                        # No AppRun - call the executable directly
                         wrapper_content = f"""#!/bin/bash
 # Wrapper script for {installer.app_info.get('name', 'AppImage')}
 export DESKTOPINTEGRATION=1
+cd "{installer.app_install_dir}"
 exec "{final_installed_exec_path}" "$@"
 """
                     
@@ -698,12 +699,12 @@ exec "{final_installed_exec_path}" "$@"
                             target_desktop_link_path = installer.final_copied_desktop_path
                     else:
                         logger.error(f"Failed to create symlinks for {mode_name} installation.")
-                        self.update_status(translator.get_text("Error: Failed to create shortcuts."), error=True)
+                        self.update_status(translator.get_text("Error: Failed to create shortcuts."), is_error=True)
                         # Installation partially succeeded, but integration failed
                         success = False
                 else:
                     logger.error(f"Failed to copy files for {mode_name} installation.")
-                    self.update_status(translator.get_text("Error: Failed to copy AppImage files."), error=True)
+                    self.update_status(translator.get_text("Error: Failed to copy AppImage files."), is_error=True)
                     success = False
 
             # 5. Add to Database (if successful)

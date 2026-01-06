@@ -70,13 +70,20 @@ class DBManager:
                 logger.debug(f"Veritabanı yüklendi: {len(data.get('installed_apps', [])) if data else 0} uygulama var")
                 return data
         except json.JSONDecodeError:
-            logger.error(f"Veritabanı bozuk: {self.db_path}")
-            # Bozuk veritabanını yedekleyip yeni bir tane oluşturalım
-            os.rename(self.db_path, f"{self.db_path}.corrupt.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+            logger.error(f"Database corrupted: {self.db_path}")
+            # Backup corrupted database and create new one
+            try:
+                os.rename(self.db_path, f"{self.db_path}.corrupt.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+            except OSError as rename_err:
+                logger.error(f"Failed to rename corrupted database: {rename_err}")
             self._ensure_db_exists()
-            return self._load_db()
+            # Return fresh empty data instead of recursive call to prevent infinite loop
+            return {
+                "installed_apps": [],
+                "last_updated": datetime.datetime.now().isoformat()
+            }
         except Exception as e:
-            logger.error(f"Veritabanı yüklenirken hata: {e}")
+            logger.error(f"Error loading database: {e}")
             raise
 
     def _save_db(self, data_to_save=None):
